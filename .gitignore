@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+
+# Modèles Whisper (volumineux — téléchargés localement)
+models/
+*.bin
+
+# Sorties / runtime
+logs/
+*.wav
+*.log
+dist/
+build/
+*.spec
+
+# Données locales (V2)
+*.sqlite
+*.db
+
+# OS / IDE
+.vscode/
+.idea/
+Thumbs.db

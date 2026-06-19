@@ -1,0 +1,51 @@
+# Whisperty — configuration utilisateur.
+# Modifiez ce fichier puis relancez l'application.
+
+audio:
+  device: null            # null = micro par défaut ; sinon index (voir logs) ou nom
+  samplerate: 16000       # Whisper attend 16 kHz (rééchantillonnage auto sinon)
+  vad_threshold: 0.01     # seuil RMS du VAD simple (silence si niveau < seuil)
+  silence_duration: 1.5   # secondes de silence avant arrêt auto (mode toggle)
+  max_duration: 60        # garde-fou : durée max d'un enregistrement (s)
+
+transcription:
+  model: medium           # base | small | medium | large-v3  (medium = bon compromis
+                          # précision/vitesse sur CPU pour le français technique)
+  language: fr            # langue forcée (fr) ; null = détection automatique
+  device: cpu             # cpu | cuda
+  compute_type: int8      # int8 (CPU) | float16 (CUDA) | int8_float16
+  beam_size: 5
+  local_files_only: true  # 100 % hors-ligne (défaut). Passer à false UNE fois pour
+                          # télécharger un modèle absent, puis remettre à true.
+  initial_prompt: "Contexte technique : énergie, réseau de distribution, IT."
+
+hotkey:
+  # mode : toggle = un appui démarre / un second appui (ou un silence) arrête.
+  #        push_to_talk = maintenir la combinaison en parlant, relâcher pour transcrire.
+  mode: toggle            # toggle | push_to_talk
+
+  # combo : format pynput. Modificateurs entre chevrons, reliés par +, puis une touche.
+  #   Modificateurs : <ctrl> <alt> <shift> <cmd>
+  #   Touche finale : <space>, <enter>, <f9>… ou une lettre simple (a, d, …)
+  #   Exemples valides : "<ctrl>+<alt>+<space>"  ·  "<ctrl>+<alt>+d"  ·  "<ctrl>+<shift>+<f9>"
+  #   À éviter : Win+Space (réservé par Windows). Combo invalide => repli automatique
+  #   sur <ctrl>+<alt>+<space> (un avertissement est journalisé).
+  combo: "<ctrl>+<alt>+<space>"
+
+  # double_tap_key : si défini, REMPLACE `combo` par un double-appui rapide sur cette
+  #   touche (ex: "ctrl", "alt", "shift"). null = désactivé (on utilise `combo`).
+  double_tap_key: null
+
+output:
+  method: paste           # paste (presse-papiers + Ctrl+V, robuste FR) | type (frappe)
+  restore_clipboard: true # restaurer le contenu du presse-papiers après collage
+  type_delay: 0.005       # délai entre frappes (méthode "type")
+
+dictionary:
+  enabled: true
+  path: dictionary.txt    # mots biaisés (hotwords) + corrections "mauvais => bon"
+
+logging:
+  level: INFO             # DEBUG | INFO | WARNING | ERROR
+  path: logs/whisperty.log
+  max_history: 200        # nb max de transcriptions conservées (V2, SQLite)

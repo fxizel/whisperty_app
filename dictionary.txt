@@ -1,0 +1,82 @@
+# Whisperty — dictionnaire personnalisé.
+#
+# Format :
+#   terme              -> mot favorisé par la reconnaissance (hotword / initial_prompt)
+#   mauvais => correct -> correction appliquée APRÈS transcription (mots entiers, casse ignorée)
+#   # ...              -> commentaire (ignoré), lignes vides ignorées
+#
+# CONSEIL : garde une vingtaine de termes favorisés MAX (les acronymes/noms propres que
+# Whisper transcrit mal). Trop de hotwords dilue le biais. Élague cette liste selon TON
+# vocabulaire réel, et ajoute des corrections au fil des erreurs constatées.
+
+# --- Tension & réseau de distribution ---
+HTA
+HTB
+BTA
+BTB
+moyenne tension
+basse tension
+poste source
+poste de transformation
+départ HTA
+jeu de barres
+transformateur
+disjoncteur
+sectionneur
+cellule HTA
+
+# --- Conduite / supervision ---
+SCADA
+téléconduite
+télécommande
+télésignalisation
+ADMS
+RTU
+IEC 61850
+DNP3
+Modbus
+
+# --- Comptage & marché de l'électricité ---
+GRD
+GRT
+point de mesure
+point de livraison
+courbe de charge
+injection
+soutirage
+compteur intelligent
+smart metering
+
+# --- Production & mobilité ---
+photovoltaïque
+onduleur
+autoconsommation
+borne de recharge
+IRVE
+CSMS
+OCPP
+
+# --- Institutions / Suisse ---
+Swissgrid
+OFEN
+ElCom
+ESTI
+OIBT
+AES
+Pronovo
+
+# --- IT ---
+API
+endpoint
+backend
+frontend
+pipeline CI/CD
+Kubernetes
+Docker
+Active Directory
+
+# --- Corrections fréquentes (DÉCOMMENTE / ADAPTE à tes erreurs réelles) ---
+# Exemple : si Whisper écrit « ge erre de » au lieu de « GRD », ajoute :
+# ge erre de => GRD
+# esca da => SCADA
+# h t a => HTA

@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Whisperty — dépendances Python (Windows 10/11, Python 3.10–3.12, 64 bits)
+# Tout est local : aucune dépendance ne fait d'appel réseau à l'usage.
+# (faster-whisper télécharge le modèle UNE seule fois ; voir README pour le mode
+#  100 % hors-ligne via transcription.local_files_only.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# --- Étape 1 : capture audio ---------------------------------------------------
+sounddevice>=0.5.0      # capture micro (PortAudio, wheels Windows incluses)
+numpy>=1.24,<3.0        # buffers audio float32
+soxr>=0.5.0             # rééchantillonnage HQ vers 16 kHz (repli si le micro
+                        # n'expose pas nativement 16 kHz)
+
+# --- Étape 2 : transcription ---------------------------------------------------
+faster-whisper>=1.1.0   # Whisper via CTranslate2 (CPU int8 / CUDA). Embarque PyAV
+                        # -> décodage WAV/MP3/M4A SANS ffmpeg système.
+
+# --- Étape 3 : injection de texte ----------------------------------------------
+pyperclip>=1.8.2        # presse-papiers (injection par collage = robuste UTF-8 FR)
+pynput>=1.7.6           # frappe clavier + écoute du raccourci global
+
+# --- Étape 4 : raccourci global + system tray ----------------------------------
+pystray>=0.19.5         # icône zone de notification
+Pillow>=10.0.0          # rendu de l'icône (requis par pystray)
+PyYAML>=6.0             # lecture de config.yaml
+
+# --- Étape 5 / V2 (optionnel : décommenter au besoin) --------------------------
+# soundfile>=0.12.1     # import de fichiers audio variés (V2)
+# requests>=2.31        # client LLM local Ollama/LM Studio (V2, localhost uniquement)
+
+# --- Outils de dev (optionnel) -------------------------------------------------
+# pytest>=8.0
+# mypy>=1.8
+
+# --- Accélération GPU NVIDIA (optionnel — voir README) -------------------------
+# Installer séparément des bibliothèques CUDA 12 / cuDNN 9 compatibles CTranslate2 :
+#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# DirectML / GPU AMD / Intel ne sont PAS supportés par CTranslate2 (CPU + CUDA seulement).
