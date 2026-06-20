@@ -51,6 +51,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
 | `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
+| `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
 
 ## Concurrence (à préserver)
 
@@ -63,6 +64,9 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **Live (V2)** : `stop_live()` ne tient PAS `_lock` et ne joint PAS le thread live ; c'est
   `LiveTranscriber._finish` → `_on_live_finished` (qui reprend `_lock`) qui repasse à IDLE.
   Tenir le verrou pendant un `join()` provoquerait un interblocage avec ce callback.
+- **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
+  l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
+  suspect, sans bloquer la capture loopback.
 
 ## Décisions d'architecture à respecter
 

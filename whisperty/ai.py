@@ -72,25 +72,74 @@ class LocalLLM:
         """
         if not self.cfg.enabled or not text or not text.strip():
             return text
+        result = self._chat(self.cfg.prompt, text)
+        return result if result else text
+
+    def meeting_is_question(
+        self, segment: str, user_name: str, context: list[str]
+    ) -> bool:
+        """Détermine via le LLM si le segment est une question posée à l'utilisateur."""
+        if not self.cfg.enabled or not segment.strip():
+            return False
+        name = user_name.strip() or "l'utilisateur"
+        prompt = (
+            "Tu analyses des transcriptions de réunion en français. "
+            f"Détermine si le DERNIER segment est une question posée DIRECTEMENT à {name} "
+            "(ou une variante de son prénom). Les questions générales à tout le groupe "
+            "ne comptent pas. Réponds UNIQUEMENT par OUI ou NON."
+        )
+        ctx = "\n".join(context[-10:]) if context else segment
+        user = f"Transcription récente :\n{ctx}\n\nDernier segment à analyser :\n{segment}"
+        answer = self._chat(prompt, user)
+        if not answer:
+            return False
+        normalized = answer.strip().upper()
+        return normalized.startswith("OUI")
+
+    def meeting_reply(
+        self,
+        question: str,
+        context: list[str],
+        user_context: str,
+        reply_prompt: str,
+        user_name: str = "",
+    ) -> str | None:
+        """Génère une réponse courte pour une question de réunion. None si échec."""
+        if not self.cfg.enabled or not question.strip():
+            return None
+        name = user_name.strip() or "l'utilisateur"
+        ctx_text = "\n".join(f"- {s}" for s in context[-15:]) if context else question
+        system = reply_prompt.format(
+            user_name=name,
+            user_context=user_context or "(non renseigné)",
+            context=ctx_text,
+            question=question,
+        )
+        user = f"Question : {question}"
+        return self._chat(system, user)
+
+    def _chat(self, system: str, user: str) -> str | None:
+        """Appel générique au LLM local. Renvoie None en cas d'échec (jamais d'exception)."""
+        if not self.cfg.enabled:
+            return None
 
         endpoint = self.cfg.endpoint
         if not is_local_endpoint(endpoint):
-            # Garde de confidentialité : on refuse d'exfiltrer le texte dicté.
             logger.error(
                 "Mode IA ignoré : l'endpoint '%s' n'est pas local. "
                 "La confidentialité interdit tout envoi hors de la machine.",
                 endpoint,
             )
-            return text
+            return None
 
         payload = {
             "model": self.cfg.model,
             "messages": [
-                {"role": "system", "content": self.cfg.prompt},
-                {"role": "user", "content": text},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
             "stream": False,
-            "temperature": 0,
+            "temperature": 0.3,
         }
         try:
             request = urllib.request.Request(
@@ -99,28 +148,23 @@ class LocalLLM:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            # _OPENER refuse les redirections (cf. _NoRedirectHandler) : pas de re-POST
-            # silencieux vers un hôte distant.
             with _OPENER.open(request, timeout=self.cfg.timeout) as response:
-                # Défense en profondeur : l'URL effective doit rester locale.
                 final_url = response.geturl()
                 if not is_local_endpoint(final_url):
                     logger.error(
                         "Réponse IA via une URL non locale (%s) ; ignorée.", final_url
                     )
-                    return text
+                    return None
                 data = json.loads(response.read().decode("utf-8"))
-            refined = data["choices"][0]["message"]["content"].strip()
-            if refined:
-                logger.info("Texte raffiné par le LLM local '%s'.", self.cfg.model)
-                return refined
-            logger.warning("Réponse IA vide ; texte brut conservé.")
+            content = data["choices"][0]["message"]["content"].strip()
+            if content:
+                return content
+            logger.warning("Réponse IA vide.")
         except (urllib.error.URLError, OSError) as exc:
             logger.warning(
-                "LLM local injoignable (%s) ; texte brut conservé. "
-                "Vérifiez que le serveur (ex. Ollama) tourne sur %s.",
+                "LLM local injoignable (%s) ; vérifiez que le serveur tourne sur %s.",
                 exc, endpoint,
             )
         except (KeyError, ValueError, json.JSONDecodeError):
-            logger.warning("Réponse IA inattendue ; texte brut conservé.", exc_info=True)
-        return text
+            logger.warning("Réponse IA inattendue.", exc_info=True)
+        return None

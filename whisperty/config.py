@@ -129,6 +129,28 @@ class LiveConfig:
 
 
 @dataclass
+class MeetingConfig:
+    """Assistant de réunion : détection de questions + réponses LLM locales (V2).
+
+    Réutilise les paramètres audio de ``live`` (sortie loopback, VAD). Nécessite
+    ``ai.enabled: true`` et un serveur LLM local (Ollama, LM Studio…).
+    """
+
+    user_name: str = ""           # prénom/nom pour cibler les questions (ex. "Jean")
+    user_context: str = ""      # contexte perso (rôle, expertise) pour le LLM
+    auto_inject: bool = False     # True = injecter ; False = copier presse-papiers
+    context_segments: int = 15    # segments récents gardés comme contexte
+    reply_prompt: str = (
+        "Tu rédiges une réponse courte et professionnelle en français pour {user_name} "
+        "lors d'une réunion.\n"
+        "Contexte sur {user_name} : {user_context}\n"
+        "Transcription récente de la réunion :\n{context}\n\n"
+        "Réponds de manière naturelle et concise (1 à 3 phrases), à la première personne. "
+        "Ne commence pas par « Réponse : » ni par des guillemets."
+    )
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -140,6 +162,7 @@ class Config:
     ai: AIConfig = field(default_factory=AIConfig)
     profiles: ProfilesConfig = field(default_factory=ProfilesConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    meeting: MeetingConfig = field(default_factory=MeetingConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -167,6 +190,7 @@ class Config:
             ai=_build(AIConfig, data.get("ai")),
             profiles=_build_profiles(data.get("profiles")),
             live=_build(LiveConfig, data.get("live")),
+            meeting=_build(MeetingConfig, data.get("meeting")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
         return cfg
