@@ -49,6 +49,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost, désactivé par défaut) | fait (V2) |
 | `profiles.py` | Profils de contexte par application (override prompt/langue/dico) | fait (V2) |
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
+| `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
+| `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
 
 ## Concurrence (à préserver)
 
@@ -58,6 +60,9 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - `_stop_and_process()` relâche `_lock` avant l'arrêt bloquant de PortAudio. À l'inverse,
   `_start_recording()` tient `_lock` pendant `recorder.start()` **à dessein** (évite un flux
   orphelin si un stop concurrent survient pendant l'ouverture du périphérique).
+- **Live (V2)** : `stop_live()` ne tient PAS `_lock` et ne joint PAS le thread live ; c'est
+  `LiveTranscriber._finish` → `_on_live_finished` (qui reprend `_lock`) qui repasse à IDLE.
+  Tenir le verrou pendant un `join()` provoquerait un interblocage avec ce callback.
 
 ## Décisions d'architecture à respecter
 
@@ -74,6 +79,16 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   `check_same_thread=False` mais **tous les accès passent par `History._lock`** ; écriture non bloquante.
 - **Profils (V2)** : surcharge `initial_prompt`/langue/dictionnaire selon l'app active, capturée
   par `winutil.foreground_app()` au **démarrage** de la dictée (= cible de l'injection).
+- **Loopback (V2)** : la capture d'une **sortie** audio passe par `soundcard` (WASAPI loopback) —
+  le PortAudio embarqué par `sounddevice` n'expose PAS le loopback (vérifié : `PaWasapi_IsLoopback`
+  absent du binaire). `soundcard` est local (Core Audio via ctypes), importé paresseusement.
+  ⚠️ **COM par thread** : `soundcard` n'initialise COM que sur son thread d'import. Tout thread
+  worker qui l'appelle (transcription live, futur coordinateur réunion) DOIT s'envelopper dans
+  `loopback.com_initialized()`, sinon `CO_E_NOTINITIALIZED` (0x800401F0). `get_microphone()` lève
+  `IndexError` (jamais `None`) sur id inconnu — déjà géré dans `resolve_loopback`.
+  La transcription live (`live.py`) est un **mode exclusif** de la dictée (état `TrayState.LIVE`) ;
+  les segments sont découpés par un VAD RMS et transcrits avec les défauts de base (pas de profil,
+  pas de LLM — priorité à la latence).
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.

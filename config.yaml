@@ -87,3 +87,15 @@ profiles:
     - name: mail
       match: ["outlook.exe", "thunderbird.exe", "hxoutlook.exe"]
       initial_prompt: "Contexte : courriel professionnel, formules de politesse, noms propres."
+
+live:
+  # Transcription live d'une SORTIE audio (loopback) — ex. suivre une confcall Teams
+  # sans importer de fichier. Se lance depuis le menu tray ("Transcription live").
+  # Le transcript s'écrit au fil de l'eau dans transcript_dir/live_<horodatage>.txt
+  # et est copié dans le presse-papiers + historisé à l'arrêt. 100 % local.
+  device: null            # null = sortie par défaut ; sinon index (voir menu) ou nom (sous-chaîne)
+  block_duration: 0.5     # granularité de capture (s) ; ~latence d'arrêt
+  max_segment: 20         # durée max d'un segment avant transcription forcée (s)
+  silence_duration: 0.8   # silence (s) marquant la fin d'un segment (frontière de phrase)
+  vad_threshold: 0.008    # seuil RMS de détection de parole
+  transcript_dir: transcriptions   # dossier des transcripts live

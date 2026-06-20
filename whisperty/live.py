@@ -1,0 +1,270 @@
+"""Whisperty — transcription live d'une sortie audio (V2).
+
+Capture en continu le son d'une sortie (loopback WASAPI via :mod:`loopback`),
+découpe le flux en segments aux frontières de silence (VAD RMS simple), transcrit
+chaque segment avec faster-whisper et écrit le résultat au fil de l'eau dans un
+fichier ``transcriptions/live_<horodatage>.txt``. Pensé pour suivre une confcall
+(Teams, Meet…) sans importer de fichier.
+
+Concurrence : la capture + transcription tournent dans un thread dédié, arrêté
+par un ``threading.Event``. Le segmenteur (:class:`_Segmenter`) est une logique
+pure (testable hors-ligne, sans audio ni modèle).
+
+Confidentialité : tout est local (capture loopback + Whisper local). Aucun réseau.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional, Union
+
+import numpy as np
+
+from . import loopback
+
+logger = logging.getLogger(__name__)
+
+SAMPLE_RATE = loopback.SAMPLE_RATE  # 16 kHz
+
+
+class _Segmenter:
+    """Découpe un flux audio en segments aux frontières de silence (logique pure).
+
+    Accumule les blocs ; rend un segment lorsque (a) une parole a été détectée puis
+    suivie d'un silence assez long, ou (b) la durée max d'un segment est atteinte.
+    Les segments sans parole sont écartés (``None``) pour ne pas transcrire du silence.
+    """
+
+    def __init__(
+        self,
+        samplerate: int,
+        vad_threshold: float,
+        silence_duration: float,
+        max_segment: float,
+    ) -> None:
+        self.samplerate = samplerate
+        self.vad_threshold = vad_threshold
+        self.silence_duration = silence_duration
+        self.max_segment = max_segment
+        self._reset()
+
+    def _reset(self) -> None:
+        self._buffer: list[np.ndarray] = []
+        self._seg_len = 0.0
+        self._silence_run = 0.0
+        self._had_speech = False
+
+    def push(self, block: np.ndarray) -> Optional[np.ndarray]:
+        """Ajoute un bloc ; renvoie un segment complété à transcrire, ou ``None``."""
+        if block is None or block.size == 0:
+            return None
+        duration = block.shape[0] / self.samplerate
+        rms = float(np.sqrt(np.mean(np.square(block))))
+        self._buffer.append(block)
+        self._seg_len += duration
+        if rms >= self.vad_threshold:
+            self._had_speech = True
+            self._silence_run = 0.0
+        else:
+            self._silence_run += duration
+
+        end_of_utterance = self._had_speech and self._silence_run >= self.silence_duration
+        too_long = self._seg_len >= self.max_segment
+        if end_of_utterance or too_long:
+            return self._flush()
+        return None
+
+    def flush_final(self) -> Optional[np.ndarray]:
+        """Vide le tampon résiduel (à l'arrêt). Renvoie le segment s'il contient de la parole."""
+        return self._flush()
+
+    def _flush(self) -> Optional[np.ndarray]:
+        had_speech = self._had_speech
+        buffer = self._buffer
+        self._reset()
+        if not had_speech or not buffer:
+            return None
+        return np.concatenate(buffer).astype(np.float32, copy=False)
+
+
+class LiveTranscriber:
+    """Capture loopback + transcription continue d'une sortie audio."""
+
+    def __init__(
+        self,
+        config,
+        transcriber,
+        on_segment: Optional[Callable[[str, str], None]] = None,
+        on_finished: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        self._config = config
+        self.cfg = config.live
+        self.transcriber = transcriber
+        self._on_segment = on_segment
+        self._on_finished = on_finished
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._file = None
+        self._segments: list[str] = []
+        self._error: Optional[str] = None
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    # -- cycle de vie ----------------------------------------------------------
+    def start(self, device_spec: Optional[Union[int, str]] = None) -> bool:
+        """Démarre la capture+transcription dans un thread dédié. False si déjà en cours."""
+        if self.is_running():
+            return False
+        self._stop.clear()
+        self._segments = []
+        self._error = None
+        try:
+            self._thread = threading.Thread(
+                target=self._run, args=(device_spec,), daemon=True
+            )
+            self._thread.start()
+        except RuntimeError:
+            logger.exception("Démarrage du thread de transcription live impossible")
+            self._thread = None
+            return False
+        return True
+
+    def stop(self) -> None:
+        """Demande l'arrêt (non bloquant) ; le thread finalise et appelle on_finished."""
+        self._stop.set()
+
+    def wait(self, timeout: Optional[float] = None) -> None:
+        """Attend la fin du thread (utilisé à l'arrêt de l'application)."""
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+
+    # -- worker ----------------------------------------------------------------
+    def _run(self, device_spec: Optional[Union[int, str]]) -> None:
+        device_name: Optional[str] = None
+        path: Optional[Path] = None
+        try:
+            # COM doit être initialisé sur CE thread (worker) : soundcard ne le fait que
+            # sur le thread d'import. Sans cela : CO_E_NOTINITIALIZED (0x800401F0).
+            with loopback.com_initialized():
+                device_name, mic = loopback.resolve_loopback(device_spec)
+                path = self._open_transcript(device_name)
+                logger.info("Transcription live démarrée (sortie : %s).", device_name)
+                block_frames = max(1, int(SAMPLE_RATE * self.cfg.block_duration))
+                with mic.recorder(samplerate=SAMPLE_RATE, channels=1, blocksize=block_frames) as rec:
+                    self._consume(lambda n: np.asarray(rec.record(numframes=n)).reshape(-1))
+        except loopback.SoundcardUnavailableError as exc:
+            logger.error("%s", exc)
+            self._error = str(exc)
+        except loopback.LoopbackError as exc:
+            logger.error("%s", exc)
+            self._error = str(exc)
+        except Exception:  # noqa: BLE001 — ne jamais propager dans le thread
+            logger.exception("Transcription live échouée")
+            self._error = "Erreur de transcription live (voir logs)."
+        finally:
+            self._close_transcript()
+            self._finish(device_name, path)
+
+    def _consume(self, record_fn: Callable[[int], np.ndarray]) -> None:
+        """Boucle de capture : segmente et transcrit jusqu'à l'arrêt demandé."""
+        segmenter = _Segmenter(
+            SAMPLE_RATE, self.cfg.vad_threshold, self.cfg.silence_duration, self.cfg.max_segment
+        )
+        block_frames = max(1, int(SAMPLE_RATE * self.cfg.block_duration))
+        while not self._stop.is_set():
+            try:
+                block = record_fn(block_frames)
+            except Exception:  # noqa: BLE001 — périphérique retiré, etc.
+                logger.exception("Capture loopback interrompue")
+                break
+            completed = segmenter.push(block)
+            if completed is not None:
+                self._handle_segment(completed)
+        # Vide le segment en cours à l'arrêt.
+        final = segmenter.flush_final()
+        if final is not None:
+            self._handle_segment(final)
+
+    def _handle_segment(self, audio: np.ndarray) -> None:
+        # En live, on n'applique PAS le raffinage LLM (self.llm.refine) utilisé en dictée :
+        # il ajouterait une latence par segment incompatible avec le suivi « au fil de l'eau ».
+        # Le dictionnaire, lui, reste appliqué via transcriber.transcribe().
+        try:
+            text = self.transcriber.transcribe(audio)
+        except Exception:  # noqa: BLE001 — un segment fautif ne doit pas tout arrêter
+            logger.exception("Transcription d'un segment live échouée")
+            return
+        text = (text or "").strip()
+        if text:
+            self._emit(text)
+
+    def _emit(self, text: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        self._segments.append(text)
+        if self._file is not None:
+            try:
+                self._file.write(f"[{stamp}] {text}\n")
+                self._file.flush()
+            except OSError:
+                logger.warning("Écriture du transcript live échouée.", exc_info=True)
+        logger.info("Live [%s] %s", stamp, text)
+        if self._on_segment is not None:
+            try:
+                self._on_segment(stamp, text)
+            except Exception:  # noqa: BLE001
+                logger.exception("on_segment a levé une exception")
+
+    # -- transcript ------------------------------------------------------------
+    def _open_transcript(self, device_name: str) -> Optional[Path]:
+        """Ouvre le fichier transcript. En cas d'erreur d'écriture, la transcription
+        continue SANS fichier (le texte est de toute façon copié/historisé à l'arrêt)."""
+        try:
+            folder = self._config.resolve(self.cfg.transcript_dir)
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = folder / f"live_{stamp}.txt"
+            self._file = path.open("w", encoding="utf-8")
+            self._file.write(
+                f"# Transcription live — sortie : {device_name} — "
+                f"{datetime.now().isoformat(timespec='seconds')}\n\n"
+            )
+            self._file.flush()
+            return path
+        except OSError:
+            logger.warning(
+                "Transcript non inscriptible dans « %s » ; la transcription continue "
+                "sans fichier.", self.cfg.transcript_dir, exc_info=True,
+            )
+            self._file = None
+            return None
+
+    def _close_transcript(self) -> None:
+        if self._file is not None:
+            try:
+                self._file.close()
+            finally:
+                self._file = None
+
+    def _finish(self, device_name: Optional[str], path: Optional[Path]) -> None:
+        result = {
+            "text": "\n".join(self._segments).strip(),
+            "device": device_name,
+            "segments": len(self._segments),
+            "path": str(path) if path is not None else None,
+            "error": self._error,
+        }
+        callback = self._on_finished
+        try:
+            if callback is not None:
+                callback(result)
+        except Exception:  # noqa: BLE001
+            logger.exception("on_finished a levé une exception")
+        finally:
+            # Nuller le thread APRÈS le callback : wait()/is_running() restent cohérents
+            # pendant toute la finalisation (le callback compris). Ainsi quit()->wait()
+            # bloque réellement jusqu'à la fin de _on_live_finished avant history.close().
+            self._thread = None

@@ -23,6 +23,8 @@ from .ai import LocalLLM
 from .config import Config
 from .history import History
 from .injector import TextInjector
+from .live import LiveTranscriber
+from .loopback import list_speakers
 from .profiles import ProfileResolver
 from .recorder import AudioRecorder, MicrophoneError
 from .transcriber import ModelNotAvailableError, Transcriber
@@ -67,6 +69,11 @@ class WhispertyApp:
         self.history = History.from_config(config)
         self.llm = LocalLLM(config.ai)
         self.profiles = ProfileResolver(config)
+        # V2 : transcription live d'une sortie audio (loopback).
+        self.live = LiveTranscriber(
+            config, self.transcriber, on_finished=self._on_live_finished
+        )
+        live_devices = list_speakers()  # best-effort (liste vide si soundcard absent)
         self.tray = Tray(
             on_toggle=self.toggle,
             on_quit=self.quit,
@@ -74,6 +81,9 @@ class WhispertyApp:
             on_import_audio=self.import_audio,
             on_copy_last=self.copy_last if config.history.enabled else None,
             on_open_history=self.open_history if config.history.enabled else None,
+            on_start_live=self.start_live,
+            on_stop_live=self.stop_live,
+            live_devices=live_devices,
         )
         # État protégé par un verrou réentrant (transitions multi-threads).
         self._state = TrayState.IDLE
@@ -93,12 +103,14 @@ class WhispertyApp:
             logger.exception("Mise à jour de l'icône tray échouée")
 
     def toggle(self) -> None:
-        """Démarre/arrête la dictée. Ignoré pendant la transcription (PROCESSING)."""
+        """Démarre/arrête la dictée. Ignoré pendant PROCESSING ou la transcription live."""
         with self._lock:
             if self._state is TrayState.IDLE:
                 self._start_recording()
             elif self._state is TrayState.RECORDING:
                 self._stop_and_process()
+            elif self._state is TrayState.LIVE:
+                logger.info("Dictée ignorée : transcription live en cours.")
             else:  # PROCESSING
                 logger.info("Dictée ignorée : transcription/chargement en cours.")
 
@@ -300,6 +312,62 @@ class WhispertyApp:
             logger.exception("Sélecteur de fichier indisponible")
             return None
 
+    # -- transcription live d'une sortie audio (V2) ----------------------------
+    def start_live(self, device_spec: object = None) -> None:
+        """Démarre la transcription live d'une sortie audio (menu tray).
+
+        ``device_spec`` : None = sortie configurée/par défaut ; index = haut-parleur
+        choisi dans le menu. Mode exclusif : refusé si une autre opération est en cours.
+        """
+        if device_spec is None:
+            device_spec = self.config.live.device
+        with self._lock:
+            if self._quitting:
+                return
+            if self._state is not TrayState.IDLE:
+                logger.info("Transcription live ignorée : une autre opération est en cours.")
+                self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
+                return
+            self._set_state(TrayState.LIVE)
+        # Démarrage hors verrou ; en cas d'échec immédiat, on rétablit l'état.
+        if not self.live.start(device_spec):
+            logger.warning("La transcription live n'a pas pu démarrer.")
+            with self._lock:
+                if self._state is TrayState.LIVE:
+                    self._set_state(TrayState.IDLE)
+
+    def stop_live(self) -> None:
+        """Arrête la transcription live (menu tray)."""
+        with self._lock:
+            if self._state is not TrayState.LIVE:
+                return
+        # On ne tient PAS le verrou et on ne joint PAS ici : le thread live appellera
+        # _on_live_finished (qui reprend le verrou) pour repasser IDLE → pas d'interblocage.
+        self.live.stop()
+
+    def _on_live_finished(self, result: dict) -> None:
+        """Callback de fin de transcription live (appelé depuis le thread live)."""
+        with self._lock:
+            if self._state is TrayState.LIVE:
+                self._set_state(TrayState.IDLE)
+        error = result.get("error")
+        if error:
+            self.tray.notify(f"Transcription live arrêtée : {error}")
+            return
+        text = result.get("text") or ""
+        count = result.get("segments", 0)
+        device = result.get("device")
+        if text:
+            self.history.add(
+                text, source="live", app=device, model=self.config.transcription.model
+            )
+            self.injector.copy_to_clipboard(text)
+            self.tray.notify(
+                f"Transcription live arrêtée — {count} segment(s) copiés dans le presse-papiers."
+            )
+        else:
+            self.tray.notify("Transcription live arrêtée — aucun texte transcrit.")
+
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
         """Copie la dernière transcription dans le presse-papiers (menu tray)."""
@@ -341,6 +409,12 @@ class WhispertyApp:
                 self._listener.stop()
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            # Arrête la transcription live et attend la fin du thread (flush du transcript).
+            self.live.stop()
+            self.live.wait(timeout=5.0)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.history.close()
         except Exception:  # noqa: BLE001

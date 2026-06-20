@@ -117,6 +117,18 @@ class ProfilesConfig:
 
 
 @dataclass
+class LiveConfig:
+    """Transcription live d'une sortie audio (loopback WASAPI, V2)."""
+
+    device: Optional[Union[int, str]] = None  # null = sortie par défaut ; index ou nom sinon
+    block_duration: float = 0.5               # taille des blocs de capture (s)
+    max_segment: float = 20.0                 # durée max d'un segment avant transcription forcée
+    silence_duration: float = 0.8             # silence (s) marquant la fin d'un segment
+    vad_threshold: float = 0.008              # seuil RMS de détection de parole
+    transcript_dir: str = "transcriptions"    # dossier des transcripts live
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -127,6 +139,7 @@ class Config:
     history: HistoryConfig = field(default_factory=HistoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     profiles: ProfilesConfig = field(default_factory=ProfilesConfig)
+    live: LiveConfig = field(default_factory=LiveConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -153,6 +166,7 @@ class Config:
             history=_build(HistoryConfig, data.get("history")),
             ai=_build(AIConfig, data.get("ai")),
             profiles=_build_profiles(data.get("profiles")),
+            live=_build(LiveConfig, data.get("live")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
         return cfg

@@ -16,17 +16,20 @@ class TrayState(Enum):
     IDLE = "idle"
     RECORDING = "recording"
     PROCESSING = "processing"
+    LIVE = "live"
 
 
 _COLORS = {
     TrayState.IDLE: (120, 120, 120),       # gris : prêt
     TrayState.RECORDING: (220, 40, 40),    # rouge : enregistrement
     TrayState.PROCESSING: (230, 150, 30),  # orange : transcription
+    TrayState.LIVE: (40, 90, 220),         # bleu : transcription live (sortie audio)
 }
 _TITLES = {
     TrayState.IDLE: "Whisperty — prêt",
     TrayState.RECORDING: "Whisperty — enregistrement…",
     TrayState.PROCESSING: "Whisperty — transcription…",
+    TrayState.LIVE: "Whisperty — transcription live…",
 }
 
 
@@ -51,6 +54,9 @@ class Tray:
         on_import_audio: Optional[Callable[[], None]] = None,
         on_copy_last: Optional[Callable[[], None]] = None,
         on_open_history: Optional[Callable[[], None]] = None,
+        on_start_live: Optional[Callable[[Optional[object]], None]] = None,
+        on_stop_live: Optional[Callable[[], None]] = None,
+        live_devices: Optional[list[dict]] = None,
     ) -> None:
         from pystray import Icon, Menu, MenuItem
 
@@ -63,6 +69,11 @@ class Tray:
 
         menu = Menu(
             MenuItem("Démarrer / Arrêter la dictée", _action(on_toggle)),
+            MenuItem(
+                "Transcription live (sortie audio)",
+                self._build_live_submenu(Menu, MenuItem, on_start_live, on_stop_live, live_devices),
+                enabled=on_start_live is not None,
+            ),
             MenuItem(
                 "Importer un fichier audio…",
                 _action(on_import_audio),
@@ -90,6 +101,27 @@ class Tray:
         self._icon = Icon(
             "whisperty", self._images[TrayState.IDLE], _TITLES[TrayState.IDLE], menu
         )
+
+    @staticmethod
+    def _build_live_submenu(Menu, MenuItem, on_start_live, on_stop_live, live_devices):
+        """Sous-menu de la transcription live : choix de la sortie + arrêt."""
+        def start_with(spec):
+            # spec capturé par défaut d'argument pour éviter la capture tardive de boucle.
+            return lambda icon, item: on_start_live(spec) if on_start_live else None
+
+        items = [MenuItem("Démarrer — sortie par défaut", start_with(None))]
+        for dev in (live_devices or []):
+            label = dev["name"] + (" (défaut)" if dev.get("is_default") else "")
+            items.append(MenuItem(label, start_with(dev["index"])))
+        items.append(Menu.SEPARATOR)
+        items.append(
+            MenuItem(
+                "Arrêter la transcription live",
+                lambda icon, item: on_stop_live() if on_stop_live else None,
+                enabled=on_stop_live is not None,
+            )
+        )
+        return Menu(*items)
 
     def notify(self, message: str, title: str = "Whisperty") -> None:
         """Affiche une notification système (best-effort selon le backend pystray)."""

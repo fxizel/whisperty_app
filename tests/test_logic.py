@@ -22,6 +22,14 @@ def _install_stubs() -> None:
         sd = types.ModuleType("sounddevice")
         sd.PortAudioError = type("PortAudioError", (Exception,), {})
         sys.modules["sounddevice"] = sd
+    if "soundcard" not in sys.modules:
+        # Doublure neutre : pas de sortie audio (suffit pour construire l'app).
+        sc = types.ModuleType("soundcard")
+        sc.all_speakers = lambda: []
+        sc.default_speaker = lambda: (_ for _ in ()).throw(RuntimeError("no default"))
+        sc.all_microphones = lambda include_loopback=False: []
+        sc.get_microphone = lambda dev_id, include_loopback=False: None
+        sys.modules["soundcard"] = sc
 
 
 _install_stubs()
@@ -585,6 +593,290 @@ def test_config_robustness(tmp_path: Path | None = None) -> None:
     print("[10] robustesse config : profils/numeriques malformes -> defauts surs, zero crash  OK")
 
 
+# =============================================================================
+# 11) Transcription live — segmenteur VAD (logique pure) (V2)
+# =============================================================================
+def test_live_segmenter() -> None:
+    import numpy as np
+
+    from whisperty.live import _Segmenter
+
+    sr = 16_000
+
+    def blk(amp, dur=0.1):
+        return np.full(int(sr * dur), amp, dtype=np.float32)
+
+    # Fin d'utterance : 2 blocs de parole puis silence >= silence_duration → segment.
+    seg = _Segmenter(sr, vad_threshold=0.01, silence_duration=0.3, max_segment=5.0)
+    assert seg.push(blk(0.0)) is None          # silence initial, aucune parole
+    assert seg.push(blk(0.5)) is None           # parole
+    assert seg.push(blk(0.5)) is None
+    assert seg.push(blk(0.0)) is None           # silence 0.1
+    assert seg.push(blk(0.0)) is None           # 0.2
+    out = seg.push(blk(0.0))                     # 0.3 → flush
+    assert out is not None and out.size > 0
+    assert seg.push(blk(0.0)) is None           # réinitialisé : silence pur → rien
+    assert seg.flush_final() is None
+
+    # Coupe forcée à max_segment, même sans silence.
+    seg2 = _Segmenter(sr, 0.01, silence_duration=10.0, max_segment=0.5)
+    for _ in range(4):
+        assert seg2.push(blk(0.5)) is None       # 0.1..0.4
+    assert seg2.push(blk(0.5)) is not None        # 0.5 → flush
+
+    # Silence pur : jamais de segment (mémoire bornée), même au-delà de max_segment.
+    seg3 = _Segmenter(sr, 0.01, silence_duration=10.0, max_segment=0.3)
+    assert seg3.push(blk(0.0)) is None
+    assert seg3.push(blk(0.0)) is None
+    assert seg3.push(blk(0.0)) is None            # 0.3 atteint mais aucune parole → None
+
+    # flush_final renvoie la parole en attente puis réinitialise.
+    seg4 = _Segmenter(sr, 0.01, 10.0, 10.0)
+    seg4.push(blk(0.5))
+    assert seg4.flush_final() is not None
+    assert seg4.flush_final() is None
+
+    # Bloc vide (underrun) : ignoré sans effet ni erreur.
+    seg5 = _Segmenter(sr, 0.01, 0.2, 5.0)
+    assert seg5.push(np.zeros(0, dtype=np.float32)) is None
+    assert seg5.push(blk(0.5)) is None              # la parole suivante reste prise en compte
+    assert seg5.flush_final() is not None
+    print("[11] live segmenteur VAD : utterance, max_segment, silence, bloc vide  OK")
+
+
+# =============================================================================
+# 12) Capture loopback — résolution de périphérique (soundcard simulé) (V2)
+# =============================================================================
+def test_loopback_resolve() -> None:
+    from whisperty import loopback
+
+    class FakeSpk:
+        def __init__(self, name, ident):
+            self.name = name
+            self.id = ident
+
+    class FakeMic:
+        def __init__(self, name, ident):
+            self.name = name
+            self.id = ident
+            self.isloopback = True
+
+    spks = [FakeSpk("Speakers (ASUS)", "id-asus"), FakeSpk("Headset (Jabra)", "id-jabra")]
+    fake = types.ModuleType("soundcard")
+    fake.all_speakers = lambda: spks
+    fake.default_speaker = lambda: spks[0]
+    fake.all_microphones = lambda include_loopback=False: [FakeMic(s.name, s.id) for s in spks]
+    fake.get_microphone = lambda dev_id, include_loopback=False: next(
+        (FakeMic(s.name, s.id) for s in spks if s.id == dev_id), None
+    )
+
+    previous = sys.modules.get("soundcard")
+    sys.modules["soundcard"] = fake
+    try:
+        listed = loopback.list_speakers()
+        assert [d["name"] for d in listed] == ["Speakers (ASUS)", "Headset (Jabra)"]
+        assert listed[0]["is_default"] is True and listed[1]["is_default"] is False
+
+        assert loopback.resolve_loopback(None)[0] == "Speakers (ASUS)"   # défaut
+        assert loopback.resolve_loopback(1)[0] == "Headset (Jabra)"      # index
+        assert loopback.resolve_loopback("jabra")[0] == "Headset (Jabra)"  # sous-chaîne
+        assert loopback.resolve_loopback("id-asus")[0] == "Speakers (ASUS)"  # id exact
+        _, mic = loopback.resolve_loopback(None)
+        assert mic.isloopback
+
+        for bad in ["introuvable", 9, -1]:
+            try:
+                loopback.resolve_loopback(bad)
+                raise AssertionError(f"LoopbackError attendue pour {bad!r}")
+            except loopback.LoopbackError:
+                pass
+    finally:
+        if previous is not None:
+            sys.modules["soundcard"] = previous
+        else:
+            del sys.modules["soundcard"]
+    print("[12] loopback : list_speakers + resolve (défaut/index/nom/id) + erreurs  OK")
+
+
+# =============================================================================
+# 13) Transcription live — boucle de consommation + transcript (V2)
+# =============================================================================
+def test_live_consume(tmp_path: Path | None = None) -> None:
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.live import LiveTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.live.block_duration = 0.1
+    cfg.live.silence_duration = 0.2
+    cfg.live.max_segment = 5.0
+    cfg.live.vad_threshold = 0.01
+    cfg.live.transcript_dir = "live_out"
+
+    class FakeTr:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, audio, profile=None):
+            self.calls += 1
+            return f"segment {self.calls}"
+
+    finished: dict = {}
+    lt = LiveTranscriber(cfg, FakeTr(), on_finished=lambda r: finished.update(r))
+    path = lt._open_transcript("FakeDevice")
+
+    sr = 16_000
+    blocks = [
+        np.full(1600, 0.5, np.float32),   # parole
+        np.full(1600, 0.5, np.float32),   # parole
+        np.full(1600, 0.0, np.float32),   # silence 0.1
+        np.full(1600, 0.0, np.float32),   # silence 0.2 → flush
+    ]
+    state = {"i": 0}
+
+    def record_fn(n):
+        i = state["i"]
+        state["i"] += 1
+        if i >= len(blocks):
+            lt._stop.set()
+            return np.zeros(n, np.float32)
+        return blocks[i]
+
+    lt._consume(record_fn)
+    lt._close_transcript()
+
+    assert lt._segments == ["segment 1"], lt._segments
+    content = path.read_text(encoding="utf-8")
+    assert "segment 1" in content and "FakeDevice" in content
+
+    lt._finish("FakeDevice", path)
+    assert finished["device"] == "FakeDevice"
+    assert finished["segments"] == 1
+    assert finished["text"] == "segment 1"
+    assert finished["error"] is None
+    path.unlink()
+    print("[13] live consume : segmentation -> transcription -> transcript + on_finished  OK")
+
+
+# =============================================================================
+# 14) Transcription live — robustesse de la boucle (2 segments, coupure périph.)
+# =============================================================================
+def test_live_consume_robust(tmp_path: Path | None = None) -> None:
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.live import LiveTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.live.block_duration = 0.1
+    cfg.live.silence_duration = 0.2
+    cfg.live.max_segment = 5.0
+    cfg.live.vad_threshold = 0.01
+    cfg.live.transcript_dir = "live_out2"
+
+    class FakeTr:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, audio, profile=None):
+            self.calls += 1
+            return f"seg{self.calls}"
+
+    speech = np.full(1600, 0.5, np.float32)
+    silence = np.full(1600, 0.0, np.float32)
+
+    # (a) Deux utterances séparées par un silence → deux segments distincts.
+    lt = LiveTranscriber(cfg, FakeTr())
+    p1 = lt._open_transcript("Dev")
+    seq_a = [speech, speech, silence, silence,   # flush 1
+             speech, speech, silence, silence]   # flush 2
+    st = {"i": 0}
+
+    def rec_a(n):
+        i = st["i"]
+        st["i"] += 1
+        if i >= len(seq_a):
+            lt._stop.set()
+            return silence
+        return seq_a[i]
+
+    lt._consume(rec_a)
+    lt._close_transcript()
+    assert lt._segments == ["seg1", "seg2"], lt._segments
+    if p1 is not None:
+        p1.unlink()
+
+    # (b) Coupure du périphérique en plein milieu : flush_final émet la parole en cours,
+    #     _error reste None (la rupture est gérée proprement dans _consume, pas dans _run).
+    lt2 = LiveTranscriber(cfg, FakeTr())
+    p2 = lt2._open_transcript("Dev2")
+    seq_b = [speech, speech]
+    st2 = {"i": 0}
+
+    def rec_err(n):
+        i = st2["i"]
+        st2["i"] += 1
+        if i < len(seq_b):
+            return seq_b[i]
+        raise OSError("périphérique retiré")
+
+    lt2._consume(rec_err)
+    lt2._close_transcript()
+    assert lt2._segments == ["seg1"], lt2._segments
+    assert lt2._error is None
+    if p2 is not None:
+        p2.unlink()
+    print("[14] live consume robuste : 2 utterances -> 2 segments + coupure périphérique  OK")
+
+
+# =============================================================================
+# 15) Transcription live — COM initialisé sur le worker + repli sans périphérique
+# =============================================================================
+def test_live_com_init(tmp_path: Path | None = None) -> None:
+    from whisperty import loopback
+    from whisperty.config import Config
+    from whisperty.live import LiveTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.live.block_duration = 0.1
+    cfg.live.transcript_dir = "live_com"
+
+    # Trace l'initialisation COM faite par le worker (soundcard est ici une doublure
+    # qui renvoie 0 sortie → resolve_loopback lève LoopbackError, repli propre).
+    calls = {"n": 0}
+    original = loopback.com_initialized
+
+    @contextmanager
+    def tracking():
+        calls["n"] += 1
+        with original():
+            yield
+
+    class FakeTr:
+        def transcribe(self, audio, profile=None):
+            return ""
+
+    loopback.com_initialized = tracking
+    try:
+        finished: dict = {}
+        lt = LiveTranscriber(cfg, FakeTr(), on_finished=lambda r: finished.update(r))
+        lt.start(None)
+        lt.wait(timeout=5.0)
+        assert calls["n"] >= 1, "COM doit être initialisé sur le thread worker"
+        assert finished.get("error"), "absence de sortie audio -> erreur propre attendue"
+        assert "sortie audio" in finished["error"].lower()
+    finally:
+        loopback.com_initialized = original
+    print("[15] live : COM initialisé sur le worker + repli sans périphérique  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -600,6 +892,11 @@ def _run_all() -> None:
     test_ai_local_guard()
     test_transcriber_overrides(tmp)
     test_config_robustness(tmp)
+    test_live_segmenter()
+    test_loopback_resolve()
+    test_live_consume(tmp)
+    test_live_consume_robust(tmp)
+    test_live_com_init(tmp)
     print("\nTOUS LES TESTS PASSENT")
 
 

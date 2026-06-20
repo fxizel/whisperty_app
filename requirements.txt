@@ -24,9 +24,13 @@ pystray>=0.19.5         # icône zone de notification
 Pillow>=10.0.0          # rendu de l'icône (requis par pystray)
 PyYAML>=6.0             # lecture de config.yaml
 
-# --- Étape 5 / V2 (optionnel : décommenter au besoin) --------------------------
-# soundfile>=0.12.1     # import de fichiers audio variés (V2)
-# requests>=2.31        # client LLM local Ollama/LM Studio (V2, localhost uniquement)
+# --- V2 : transcription live d'une sortie audio (loopback WASAPI) ---------------
+soundcard>=0.4.2        # capture loopback de la sortie audio (Windows Core Audio via
+                        # ctypes ; PortAudio/sounddevice n'expose pas le loopback).
+                        # 100 % local, aucun appel réseau.
+
+# --- V2 (optionnel : décommenter au besoin) ------------------------------------
+# requests>=2.31        # non requis : le client LLM local utilise urllib (stdlib)
 
 # --- Outils de dev (optionnel) -------------------------------------------------
 # pytest>=8.0

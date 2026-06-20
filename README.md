@@ -27,6 +27,7 @@ navigateur…) **sans qu'aucune donnée ne quitte la machine**.
 - 📂 **Import de fichiers audio** (WAV/MP3/M4A/FLAC…) via le menu tray ; le texte est copié dans le presse-papiers et archivé (décodage PyAV embarqué, sans ffmpeg).
 - 🤖 **Mode IA local optionnel** — reponctuation/correction via un LLM **sur la machine** (Ollama, LM Studio…). Désactivé par défaut ; **seuls les endpoints locaux sont acceptés** (la confidentialité interdit tout envoi distant).
 - 🎯 **Profils de contexte** — l'`initial_prompt`, la langue et le dictionnaire s'adaptent à l'application active (profil « code » dans VS Code, « mail » dans Outlook…).
+- 🔊 **Transcription live d'une sortie audio** — capture le son qui **sort** d'un périphérique de ton choix (loopback WASAPI) pour retranscrire en continu une confcall **Teams/Meet** sans importer de fichier. Le transcript s'écrit au fil de l'eau et est copié + historisé à l'arrêt. 100 % local.
 
 ## Prérequis système (Windows)
 
@@ -90,6 +91,7 @@ python -m whisperty.recorder
 | `history` | `enabled`, `path` (→ `whisperty.db`), `max_entries` |
 | `ai` | `enabled`, `endpoint` (local uniquement), `model`, `prompt`, `timeout` |
 | `profiles` | `enabled`, `definitions` (`name`, `match`, `initial_prompt`, `language`, `hotwords`, `corrections`, `dictionary`) |
+| `live` | `device`, `block_duration`, `max_segment`, `silence_duration`, `vad_threshold`, `transcript_dir` |
 
 ## Dictionnaire (`dictionary.txt`)
 
@@ -110,6 +112,17 @@ python -m whisperty.recorder
 - **Profils de contexte** (`profiles.enabled: true`) : selon l'application au premier plan au
   démarrage de la dictée, un profil surcharge l'`initial_prompt`, la langue et le dictionnaire
   (cf. `profiles.definitions` dans `config.yaml`).
+- **Transcription live d'une sortie audio** : menu tray → « Transcription live (sortie audio) » →
+  choisissez la sortie à capturer (« sortie par défaut » ou un périphérique listé). Whisperty
+  capture en **loopback** ce qui sort de ce périphérique (ex. l'audio d'une confcall Teams) et
+  transcrit en continu. Le transcript s'écrit au fil de l'eau dans
+  `transcriptions/live_<horodatage>.txt` ; à l'arrêt (« Arrêter la transcription live »), le texte
+  complet est copié dans le presse-papiers et archivé. Icône tray **bleue** pendant la capture.
+  Nécessite `soundcard` (`pip install soundcard`) — `sounddevice`/PortAudio n'expose pas le
+  loopback WASAPI. 100 % local, aucun réseau.
+
+  > Astuce : pour transcrire à la fois les autres participants **et** votre voix, choisissez la
+  > sortie sur laquelle joue Teams. Pour capturer aussi votre micro, c'est la dictée classique.
 
 ## Tests
 

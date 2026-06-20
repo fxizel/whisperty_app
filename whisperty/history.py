@@ -56,6 +56,9 @@ class History:
         self.enabled = enabled
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
+        # Une fois fermé (à l'arrêt de l'app), add()/recent() deviennent des no-op :
+        # un écrivain tardif (thread live) ne doit pas ROUVRIR la connexion après close().
+        self._closed = False
 
     @classmethod
     def from_config(cls, config) -> "History":
@@ -70,6 +73,10 @@ class History:
     # -- connexion (paresseuse) ------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
         """Ouvre la connexion au premier besoin et crée le schéma. Sous verrou."""
+        if self._closed:
+            # Backstop anti-réouverture : un écrivain tardif après close() est refusé
+            # (erreur sqlite3 capturée par les appelants → no-op silencieux).
+            raise sqlite3.ProgrammingError("Historique fermé.")
         if self._conn is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # check_same_thread=False : la connexion est partagée entre threads, mais
@@ -100,8 +107,8 @@ class History:
         app: Optional[str] = None,
         model: Optional[str] = None,
     ) -> None:
-        """Archive une transcription. No-op si désactivé ou texte vide."""
-        if not self.enabled or not text:
+        """Archive une transcription. No-op si désactivé, fermé, ou texte vide."""
+        if not self.enabled or self._closed or not text:
             return
         timestamp = datetime.now().isoformat(timespec="seconds")
         try:
@@ -132,7 +139,7 @@ class History:
     # -- lecture ---------------------------------------------------------------
     def recent(self, limit: int = 10) -> list[HistoryEntry]:
         """Renvoie les dernières transcriptions, de la plus récente à la plus ancienne."""
-        if not self.enabled:
+        if not self.enabled or self._closed:
             return []
         try:
             with self._lock:
@@ -160,7 +167,7 @@ class History:
 
     def clear(self) -> None:
         """Vide l'historique."""
-        if not self.enabled:
+        if not self.enabled or self._closed:
             return
         try:
             with self._lock:
@@ -172,6 +179,7 @@ class History:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._conn is not None:
                 try:
                     self._conn.close()
