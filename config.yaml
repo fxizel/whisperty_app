@@ -122,3 +122,20 @@ conference:
   distinguish_speakers: true
   mic_label: "Moi"
   system_label: "Interlocuteurs"
+
+meeting:
+  # Assistant de réunion : écoute la sortie audio (mêmes réglages que live) et propose
+  # des réponses quand on vous pose une question. Nécessite ai.enabled: true et un
+  # LLM local (Ollama, LM Studio…). Lancez depuis le menu tray.
+  user_name: ""           # VOTRE prénom/nom tel qu'on vous appelle en réunion (ex. "Jean")
+  user_context: ""        # contexte pour le LLM (rôle, expertise, sujet de la réunion…)
+  auto_inject: false      # false = copie la réponse dans le presse-papiers (recommandé)
+                          # true = injecte directement (Ctrl+V) dans l'app au premier plan
+  context_segments: 15    # nb de segments récents gardés comme contexte pour le LLM
+  reply_prompt: >-
+    Tu rédiges une réponse courte et professionnelle en français pour {user_name}
+    lors d'une réunion. Contexte sur {user_name} : {user_context}
+    Transcription récente de la réunion :
+    {context}
+    Réponds de manière naturelle et concise (1 à 3 phrases), à la première personne.
+    Ne commence pas par « Réponse : » ni par des guillemets.

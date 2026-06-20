@@ -26,6 +26,7 @@ from .history import History
 from .injector import TextInjector
 from .live import LiveTranscriber
 from .loopback import list_speakers
+from .meeting import MeetingAssistant
 from .profiles import ProfileResolver
 from .recorder import AudioRecorder, MicrophoneError
 from .transcriber import ModelNotAvailableError, Transcriber
@@ -88,9 +89,21 @@ class WhispertyApp:
             on_open_history=self.open_history if config.history.enabled else None,
             on_start_live=self.start_live,
             on_stop_live=self.stop_live,
+            on_start_meeting=self.start_meeting,
+            on_stop_meeting=self.stop_meeting,
             live_devices=live_devices,
             on_start_conference=self.start_conference if config.conference.enabled else None,
             on_stop_conference=self.stop_conference if config.conference.enabled else None,
+        )
+        # V2 : assistant de réunion (questions → réponses LLM locales).
+        self.meeting = MeetingAssistant(
+            config,
+            self.transcriber,
+            self.llm,
+            self.injector,
+            history=self.history,
+            on_notify=self.tray.notify,
+            on_finished=self._on_meeting_finished,
         )
         # État protégé par un verrou réentrant (transitions multi-threads).
         self._state = TrayState.IDLE
@@ -120,6 +133,8 @@ class WhispertyApp:
                 logger.info("Dictée ignorée : transcription live en cours.")
             elif self._state is TrayState.CONFERENCE:
                 logger.info("Dictée ignorée : réunion en cours.")
+            elif self._state is TrayState.MEETING:
+                logger.info("Dictée ignorée : assistant de réunion en cours.")
             else:  # PROCESSING
                 logger.info("Dictée ignorée : transcription/chargement en cours.")
 
@@ -386,10 +401,34 @@ class WhispertyApp:
         """
         if device_spec is None:
             device_spec = self.config.conference.system_device
+
+    # -- assistant de réunion (V2) ---------------------------------------------
+    def start_meeting(self, device_spec: object = None) -> None:
+        """Démarre l'assistant de réunion (menu tray).
+
+        Écoute la sortie audio de la confcall, détecte les questions posées à
+        l'utilisateur (``meeting.user_name``) et génère des réponses via le LLM local.
+        """
+        if not self.config.ai.enabled:
+            self.tray.notify(
+                "Assistant de réunion : activez ai.enabled et un LLM local (Ollama…)."
+            )
+            logger.warning("Assistant de réunion refusé : ai.enabled est false.")
+            return
+        if not self.config.meeting.user_name.strip():
+            self.tray.notify(
+                "Assistant de réunion : renseignez meeting.user_name dans config.yaml."
+            )
+            logger.warning("Assistant de réunion refusé : meeting.user_name vide.")
+            return
+        if device_spec is None:
+            device_spec = self.config.live.device
+
         with self._lock:
             if self._quitting:
                 return
             if self._state is not TrayState.IDLE:
+
                 logger.info("Réunion ignorée : une autre opération est en cours.")
                 self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
                 return
@@ -436,6 +475,55 @@ class WhispertyApp:
             )
         else:
             self.tray.notify(f"Réunion terminée — {count} segment(s) (sources : {sources}).")
+                logger.info("Assistant de réunion ignoré : une autre opération est en cours.")
+                self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
+                return
+            self._set_state(TrayState.MEETING)
+        if not self.meeting.start(device_spec):
+            logger.warning("L'assistant de réunion n'a pas pu démarrer.")
+            with self._lock:
+                if self._state is TrayState.MEETING:
+                    self._set_state(TrayState.IDLE)
+            return
+        self.tray.notify(
+            f"Assistant de réunion actif — écoute des questions pour "
+            f"{self.config.meeting.user_name.strip()}."
+        )
+
+    def stop_meeting(self) -> None:
+        """Arrête l'assistant de réunion (menu tray)."""
+        with self._lock:
+            if self._state is not TrayState.MEETING:
+                return
+        self.meeting.stop()
+
+    def _on_meeting_finished(self, result: dict) -> None:
+        """Callback de fin d'assistant de réunion (thread worker)."""
+        with self._lock:
+            if self._state is TrayState.MEETING:
+                self._set_state(TrayState.IDLE)
+        error = result.get("error")
+        if error:
+            self.tray.notify(f"Assistant de réunion arrêté : {error}")
+            return
+        text = result.get("text") or ""
+        reply_count = result.get("reply_count", 0)
+        device = result.get("device")
+        if text:
+            self.history.add(
+                text, source="réunion-transcript", app=device,
+                model=self.config.transcription.model,
+            )
+            self.injector.copy_to_clipboard(text)
+        if reply_count:
+            self.tray.notify(
+                f"Réunion terminée — {reply_count} réponse(s) générée(s), "
+                f"transcript copié dans le presse-papiers."
+            )
+        elif text:
+            self.tray.notify("Réunion terminée — transcript copié dans le presse-papiers.")
+        else:
+            self.tray.notify("Réunion terminée — aucun texte transcrit.")
 
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
@@ -489,6 +577,8 @@ class WhispertyApp:
             # ~6 s + join du thread système 2 s) pour que l'historique soit écrit AVANT close().
             self.conference.stop()
             self.conference.wait(timeout=10.0)
+            self.meeting.stop()
+            self.meeting.wait(timeout=5.0)
         except Exception:  # noqa: BLE001
             pass
         try:
