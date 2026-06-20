@@ -148,6 +148,8 @@ class ConferenceConfig:
     mic_label: str = "Moi"
     system_label: str = "Interlocuteurs"
 
+
+@dataclass
 class MeetingConfig:
     """Assistant de réunion : détection de questions + réponses LLM locales (V2).
 

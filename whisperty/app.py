@@ -401,34 +401,10 @@ class WhispertyApp:
         """
         if device_spec is None:
             device_spec = self.config.conference.system_device
-
-    # -- assistant de réunion (V2) ---------------------------------------------
-    def start_meeting(self, device_spec: object = None) -> None:
-        """Démarre l'assistant de réunion (menu tray).
-
-        Écoute la sortie audio de la confcall, détecte les questions posées à
-        l'utilisateur (``meeting.user_name``) et génère des réponses via le LLM local.
-        """
-        if not self.config.ai.enabled:
-            self.tray.notify(
-                "Assistant de réunion : activez ai.enabled et un LLM local (Ollama…)."
-            )
-            logger.warning("Assistant de réunion refusé : ai.enabled est false.")
-            return
-        if not self.config.meeting.user_name.strip():
-            self.tray.notify(
-                "Assistant de réunion : renseignez meeting.user_name dans config.yaml."
-            )
-            logger.warning("Assistant de réunion refusé : meeting.user_name vide.")
-            return
-        if device_spec is None:
-            device_spec = self.config.live.device
-
         with self._lock:
             if self._quitting:
                 return
             if self._state is not TrayState.IDLE:
-
                 logger.info("Réunion ignorée : une autre opération est en cours.")
                 self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
                 return
@@ -475,6 +451,32 @@ class WhispertyApp:
             )
         else:
             self.tray.notify(f"Réunion terminée — {count} segment(s) (sources : {sources}).")
+
+    # -- assistant de réunion (V2) ---------------------------------------------
+    def start_meeting(self, device_spec: object = None) -> None:
+        """Démarre l'assistant de réunion (menu tray).
+
+        Écoute la sortie audio de la confcall, détecte les questions posées à
+        l'utilisateur (``meeting.user_name``) et génère des réponses via le LLM local.
+        """
+        if not self.config.ai.enabled:
+            self.tray.notify(
+                "Assistant de réunion : activez ai.enabled et un LLM local (Ollama…)."
+            )
+            logger.warning("Assistant de réunion refusé : ai.enabled est false.")
+            return
+        if not self.config.meeting.user_name.strip():
+            self.tray.notify(
+                "Assistant de réunion : renseignez meeting.user_name dans config.yaml."
+            )
+            logger.warning("Assistant de réunion refusé : meeting.user_name vide.")
+            return
+        if device_spec is None:
+            device_spec = self.config.live.device
+        with self._lock:
+            if self._quitting:
+                return
+            if self._state is not TrayState.IDLE:
                 logger.info("Assistant de réunion ignoré : une autre opération est en cours.")
                 self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
                 return
