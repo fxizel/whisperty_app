@@ -1,0 +1,30 @@
+# Configuration des outils de développement (tests, couverture, lint).
+# Ce fichier ne déclare PAS de [build-system] ni de [project] : Whisperty n'est
+# pas distribué comme paquet pip (packaging via PyInstaller, cf. whisperty.spec).
+# Il sert uniquement à configurer pytest, coverage et ruff de façon déterministe.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Les doublures des dépendances binaires sont posées par tests/conftest.py.
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["whisperty"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [".venv", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+# Jeu de règles par défaut de ruff (pyflakes F + erreurs pycodestyle E4/E7/E9) :
+# détecte imports/variables inutilisés, redéfinitions, erreurs de syntaxe.
+# Volontairement conservateur pour rester vert sur le code existant.

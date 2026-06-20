@@ -1,0 +1,99 @@
+name: CI
+
+# Intégration continue de Whisperty : tests hors-ligne (multi-OS / multi-versions),
+# seuil de couverture et lint. La suite n'a besoin d'AUCUNE dépendance binaire
+# native (micro, GPU, GUI…) : tout est doublé dans tests/conftest.py. La CI est
+# donc rapide, reproductible et 100 % hors-ligne — fidèle à la doctrine du projet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Annule les exécutions précédentes encore en cours sur la même branche/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }} · py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows = cible de production ; Ubuntu = garde-fou « logique pure » rapide.
+        os: [windows-latest, ubuntu-latest]
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Installer les dépendances de test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Lancer la suite de tests
+        run: python -m pytest tests/ -v
+
+  coverage:
+    name: Couverture (seuil 80 %)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Installer les dépendances de test
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Tests + couverture (échec sous 80 %)
+        run: >
+          python -m pytest tests/
+          --cov=whisperty
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=80
+
+      - name: Publier le rapport de couverture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Installer ruff
+        run: pip install ruff==0.15.18
+
+      - name: Analyse statique (ruff)
+        run: ruff check whisperty/ tests/ --output-format=github

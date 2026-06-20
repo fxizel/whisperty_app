@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Whisperty — dépendances de la suite de tests hors-ligne (CI + dev local).
+#
+# Les dépendances binaires natives (sounddevice, soundcard, faster-whisper,
+# pystray, Pillow, pyperclip, pynput) sont remplacées par des DOUBLURES dans
+# tests/conftest.py. Elles ne sont donc PAS nécessaires pour exécuter les tests,
+# ce qui rend la CI rapide, reproductible et même multiplateforme (les tests de
+# logique pure tournent aussi bien sur Linux que sur Windows).
+#
+# Pour lancer l'application réelle, installer plutôt requirements.txt.
+# ─────────────────────────────────────────────────────────────────────────────
+numpy>=1.24,<3.0       # buffers audio float32 (utilisé directement par les tests)
+PyYAML>=6.0            # lecture/écriture de config.yaml dans les tests
+soxr>=0.5.0            # rééchantillonnage réel (test recorder) ; repli si absent
+pytest>=8.0
+pytest-cov>=5.0        # rapport de couverture (job « coverage » de la CI)

@@ -38,7 +38,7 @@ _install_stubs()
 # =============================================================================
 # 1) Configuration
 # =============================================================================
-def test_config_defaults_and_override(tmp_path: Path | None = None) -> None:
+def test_config_defaults_and_override(tmp_path: Path) -> None:
     import yaml
 
     from whisperty.config import Config
@@ -75,7 +75,7 @@ def test_config_defaults_and_override(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 2) Dictionnaire
 # =============================================================================
-def test_dictionary(tmp_path: Path | None = None) -> None:
+def test_dictionary(tmp_path: Path) -> None:
     from whisperty.dictionary import apply_corrections, load_dictionary
 
     base = tmp_path or Path(__file__).resolve().parent
@@ -308,7 +308,7 @@ def test_key_variants_and_imports() -> None:
 # =============================================================================
 # 6) Historique SQLite (V2)
 # =============================================================================
-def test_history(tmp_path: Path | None = None) -> None:
+def test_history(tmp_path: Path) -> None:
     from whisperty.history import History
 
     base = tmp_path or Path(__file__).resolve().parent
@@ -459,7 +459,7 @@ def test_ai_local_guard() -> None:
 # =============================================================================
 # 9) Transcripteur — overrides de profil + transcribe_file (V2, modèle simulé)
 # =============================================================================
-def test_transcriber_overrides(tmp_path: Path | None = None) -> None:
+def test_transcriber_overrides(tmp_path: Path) -> None:
     import types as _types
 
     import numpy as np
@@ -532,7 +532,7 @@ def test_transcriber_overrides(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 10) Robustesse du parsing config (YAML malformé ne doit jamais crasher) (V2)
 # =============================================================================
-def test_config_robustness(tmp_path: Path | None = None) -> None:
+def test_config_robustness(tmp_path: Path) -> None:
     import yaml
 
     from whisperty.config import Config, _build_profiles
@@ -721,7 +721,7 @@ def test_loopback_resolve() -> None:
 # =============================================================================
 # 13) Transcription live — boucle de consommation + transcript (V2)
 # =============================================================================
-def test_live_consume(tmp_path: Path | None = None) -> None:
+def test_live_consume(tmp_path: Path) -> None:
     import numpy as np
 
     from whisperty.config import Config
@@ -748,7 +748,6 @@ def test_live_consume(tmp_path: Path | None = None) -> None:
     lt = LiveTranscriber(cfg, FakeTr(), on_finished=lambda r: finished.update(r))
     path = lt._open_transcript("FakeDevice")
 
-    sr = 16_000
     blocks = [
         np.full(1600, 0.5, np.float32),   # parole
         np.full(1600, 0.5, np.float32),   # parole
@@ -784,7 +783,7 @@ def test_live_consume(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 14) Transcription live — robustesse de la boucle (2 segments, coupure périph.)
 # =============================================================================
-def test_live_consume_robust(tmp_path: Path | None = None) -> None:
+def test_live_consume_robust(tmp_path: Path) -> None:
     import numpy as np
 
     from whisperty.config import Config
@@ -857,7 +856,7 @@ def test_live_consume_robust(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 15) Transcription live — COM initialisé sur le worker + repli sans périphérique
 # =============================================================================
-def test_live_com_init(tmp_path: Path | None = None) -> None:
+def test_live_com_init(tmp_path: Path) -> None:
     from whisperty import loopback
     from whisperty.config import Config
     from whisperty.live import LiveTranscriber
@@ -945,7 +944,7 @@ def test_conference_format() -> None:
 # =============================================================================
 # 18) Réunion — boucle de consommation (mixage → segmentation → transcript)
 # =============================================================================
-def test_conference_consume(tmp_path: Path | None = None) -> None:
+def test_conference_consume(tmp_path: Path) -> None:
     import time
 
     import numpy as np
@@ -1072,7 +1071,7 @@ def test_meeting_llm() -> None:
 # =============================================================================
 # 23) Assistant de réunion — traitement d'un segment (V2)
 # =============================================================================
-def test_meeting_assistant_segment(tmp_path: Path | None = None) -> None:
+def test_meeting_assistant_segment(tmp_path: Path) -> None:
     from whisperty.config import Config, MeetingConfig
     from whisperty.meeting import MeetingAssistant
 
@@ -1125,7 +1124,7 @@ def test_meeting_assistant_segment(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 19) Réunion — robustesse : aucune source / alignement / famine / mono / queue finale
 # =============================================================================
-def test_conference_degradation(tmp_path: Path | None = None) -> None:
+def test_conference_degradation(tmp_path: Path) -> None:
     import time
 
     import numpy as np
@@ -1210,7 +1209,7 @@ def test_conference_degradation(tmp_path: Path | None = None) -> None:
 # =============================================================================
 # 20) Réunion — distinction par source (itération 2) : horodatage + entrelacement
 # =============================================================================
-def test_conference_distinct(tmp_path: Path | None = None) -> None:
+def test_conference_distinct(tmp_path: Path) -> None:
     import time
 
     import numpy as np

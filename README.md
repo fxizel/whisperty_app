@@ -3,6 +3,7 @@
 > **Dictée vocale 100 % locale pour Windows 10/11** — une alternative libre à Superwhisper,
 > propulsée par OpenAI Whisper (`faster-whisper`).
 
+[![CI](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml/badge.svg)](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml)
 ![Plateforme](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Confidentialité](https://img.shields.io/badge/100%25-local%20%C2%B7%20z%C3%A9ro%20r%C3%A9seau-2ea44f)
@@ -209,10 +210,36 @@ mauvais => correct    # correction appliquée après transcription
 
 ## Tests
 
+La suite est **100 % hors-ligne** : toutes les dépendances binaires (micro, sortie audio,
+GPU, GUI, presse-papiers, modèle Whisper, LLM) sont remplacées par des doublures dans
+`tests/conftest.py`. Les tests ne nécessitent donc **aucun matériel ni accès réseau** et
+tournent aussi bien sous Windows que sous Linux.
+
 ```powershell
-python tests/test_logic.py   # logique pure : config, dictionnaire, injection, historique,
-                             # profils, garde IA locale, overrides — sans micro ni modèle
+# Via pytest (recommandé) — découvre tous les fichiers tests/test_*.py
+pip install -r requirements-test.txt
+python -m pytest tests/ -v
+
+# Avec rapport de couverture
+python -m pytest tests/ --cov=whisperty --cov-report=term-missing
+
+# Sans pytest : chaque fichier est aussi exécutable seul
+python tests/test_logic.py
 ```
+
+| Fichier | Couvre |
+|---------|--------|
+| `test_logic.py` | config, dictionnaire, injection, machine à états, historique, profils, garde IA locale, transcripteur, live/réunion (logique pure) |
+| `test_recorder.py` | rééchantillonnage, RMS du callback, start/stop, WAV PCM16, `record_until_silence` |
+| `test_app.py` | orchestration : dictée, import fichier, live/réunion/assistant, surveillance VAD, raccourci, arrêt propre |
+| `test_components.py` | injection (cas limites), détection d'app, états/sous-menus du tray, journalisation locale |
+| `test_meeting.py` | assistant de réunion : détection de questions, réponses LLM, copie/injection |
+| `test_extra.py` | point d'entrée `__main__`, branches d'erreur loopback, écouteurs de raccourci |
+| `test_conference_extra.py` | réunion : démarrage sans source, robustesse des callbacks |
+| `test_transcriber_load.py` | chargement du modèle + **garde hors-ligne** (`HF_HUB_OFFLINE`) |
+
+Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Windows et Linux
+(Python 3.10 → 3.12), vérifie un **seuil de couverture de 80 %** et passe `ruff` sur le code.
 
 ## Packaging & démarrage automatique
 
