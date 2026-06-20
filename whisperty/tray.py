@@ -138,8 +138,9 @@ class Tray:
         est choisie de la même façon). ``on_start(spec)`` reçoit None (défaut) ou un index.
         """
         def start_with(spec):
-            # spec figé par défaut d'argument : évite la capture tardive de variable de boucle.
-            return lambda icon, item, spec=spec: on_start(spec) if on_start else None
+            def action(icon, item):
+                return on_start(spec) if on_start else None
+            return action
 
         items = [MenuItem("Démarrer — sortie par défaut", start_with(None))]
         for dev in (devices or []):
