@@ -17,6 +17,7 @@ class TrayState(Enum):
     RECORDING = "recording"
     PROCESSING = "processing"
     LIVE = "live"
+    MEETING = "meeting"
 
 
 _COLORS = {
@@ -24,12 +25,14 @@ _COLORS = {
     TrayState.RECORDING: (220, 40, 40),    # rouge : enregistrement
     TrayState.PROCESSING: (230, 150, 30),  # orange : transcription
     TrayState.LIVE: (40, 90, 220),         # bleu : transcription live (sortie audio)
+    TrayState.MEETING: (90, 40, 180),      # violet : assistant de réunion
 }
 _TITLES = {
     TrayState.IDLE: "Whisperty — prêt",
     TrayState.RECORDING: "Whisperty — enregistrement…",
     TrayState.PROCESSING: "Whisperty — transcription…",
     TrayState.LIVE: "Whisperty — transcription live…",
+    TrayState.MEETING: "Whisperty — assistant de réunion…",
 }
 
 
@@ -56,6 +59,8 @@ class Tray:
         on_open_history: Optional[Callable[[], None]] = None,
         on_start_live: Optional[Callable[[Optional[object]], None]] = None,
         on_stop_live: Optional[Callable[[], None]] = None,
+        on_start_meeting: Optional[Callable[[Optional[object]], None]] = None,
+        on_stop_meeting: Optional[Callable[[], None]] = None,
         live_devices: Optional[list[dict]] = None,
     ) -> None:
         from pystray import Icon, Menu, MenuItem
@@ -73,6 +78,13 @@ class Tray:
                 "Transcription live (sortie audio)",
                 self._build_live_submenu(Menu, MenuItem, on_start_live, on_stop_live, live_devices),
                 enabled=on_start_live is not None,
+            ),
+            MenuItem(
+                "Assistant de réunion (réponses auto)",
+                self._build_meeting_submenu(
+                    Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices
+                ),
+                enabled=on_start_meeting is not None,
             ),
             MenuItem(
                 "Importer un fichier audio…",
@@ -119,6 +131,26 @@ class Tray:
                 "Arrêter la transcription live",
                 lambda icon, item: on_stop_live() if on_stop_live else None,
                 enabled=on_stop_live is not None,
+            )
+        )
+        return Menu(*items)
+
+    @staticmethod
+    def _build_meeting_submenu(Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices):
+        """Sous-menu de l'assistant de réunion : choix de la sortie + arrêt."""
+        def start_with(spec):
+            return lambda icon, item: on_start_meeting(spec) if on_start_meeting else None
+
+        items = [MenuItem("Démarrer — sortie par défaut", start_with(None))]
+        for dev in (live_devices or []):
+            label = dev["name"] + (" (défaut)" if dev.get("is_default") else "")
+            items.append(MenuItem(label, start_with(dev["index"])))
+        items.append(Menu.SEPARATOR)
+        items.append(
+            MenuItem(
+                "Arrêter l'assistant de réunion",
+                lambda icon, item: on_stop_meeting() if on_stop_meeting else None,
+                enabled=on_stop_meeting is not None,
             )
         )
         return Menu(*items)

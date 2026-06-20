@@ -877,6 +877,126 @@ def test_live_com_init(tmp_path: Path | None = None) -> None:
     print("[15] live : COM initialisé sur le worker + repli sans périphérique  OK")
 
 
+# =============================================================================
+# 16) Assistant de réunion — détection de questions (heuristique) (V2)
+# =============================================================================
+def test_meeting_question_heuristic() -> None:
+    from whisperty.meeting import looks_like_question
+
+    assert looks_like_question("Jean, tu peux nous en dire plus ?")
+    assert looks_like_question("Comment ça marche ?", "Jean") is False  # pas de prénom
+    assert looks_like_question("Jean, comment ça marche ?", "Jean")
+    assert not looks_like_question("Merci pour la présentation.")
+    assert not looks_like_question("")
+    assert looks_like_question("Est-ce que tu es d'accord Jean ?")
+    print("[16] réunion : heuristique de détection de questions  OK")
+
+
+# =============================================================================
+# 17) Assistant de réunion — LLM meeting_is_question / meeting_reply (V2)
+# =============================================================================
+def test_meeting_llm() -> None:
+    import json
+
+    import whisperty.ai as ai_mod
+    from whisperty.ai import LocalLLM
+    from whisperty.config import AIConfig
+
+    responses = iter(["OUI", "NON", "Oui, je peux m'en occuper demain."])
+
+    class _FakeResp:
+        def __init__(self, content):
+            self._b = json.dumps(
+                {"choices": [{"message": {"content": content}}]}
+            ).encode("utf-8")
+
+        def read(self):
+            return self._b
+
+        def geturl(self):
+            return "http://localhost:11434/v1/chat/completions"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_open(req, timeout=None):
+        return _FakeResp(next(responses))
+
+    original = ai_mod._OPENER
+    ai_mod._OPENER = types.SimpleNamespace(open=fake_open)
+    try:
+        llm = LocalLLM(AIConfig(enabled=True))
+        assert llm.meeting_is_question("Jean, tu peux valider ?", "Jean", [])
+        assert not llm.meeting_is_question("Question générale ?", "Jean", [])
+        reply = llm.meeting_reply(
+            "Jean, quand est-ce livrable ?",
+            ["On parle du projet X."],
+            "Chef de projet IT",
+            "Réponds pour {user_name}. Contexte: {user_context}. {context}",
+            "Jean",
+        )
+        assert reply == "Oui, je peux m'en occuper demain."
+    finally:
+        ai_mod._OPENER = original
+    print("[17] réunion : meeting_is_question + meeting_reply (LLM simulé)  OK")
+
+
+# =============================================================================
+# 18) Assistant de réunion — traitement d'un segment (V2)
+# =============================================================================
+def test_meeting_assistant_segment(tmp_path: Path | None = None) -> None:
+    from whisperty.config import Config, MeetingConfig
+    from whisperty.meeting import MeetingAssistant
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.meeting = MeetingConfig(user_name="Jean", auto_inject=False)
+    cfg.ai.enabled = True
+
+    copied: list[str] = []
+    notified: list[str] = []
+
+    class FakeLLM:
+        def __init__(self):
+            self.cfg = cfg.ai
+
+        def meeting_is_question(self, segment, user_name, context):
+            return "Jean" in segment
+
+        def meeting_reply(self, question, context, user_context, reply_prompt, user_name=""):
+            return "Oui, c'est prévu pour vendredi."
+
+    class FakeInjector:
+        def inject(self, text):
+            pass
+
+        def copy_to_clipboard(self, text):
+            copied.append(text)
+            return True
+
+    class FakeHistory:
+        def add(self, *a, **k):
+            pass
+
+    ma = MeetingAssistant(
+        cfg, object(), FakeLLM(), FakeInjector(),
+        history=FakeHistory(), on_notify=notified.append,
+    )
+    ma._on_segment("12:00:00", "Jean, c'est pour quand ?")
+    import time
+    for _ in range(40):
+        if copied:
+            break
+        time.sleep(0.05)
+    assert copied == ["Oui, c'est prévu pour vendredi."], copied
+    assert notified and "copiée" in notified[0].lower()
+    print("[18] réunion : segment -> réponse copiée + notification  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -897,6 +1017,9 @@ def _run_all() -> None:
     test_live_consume(tmp)
     test_live_consume_robust(tmp)
     test_live_com_init(tmp)
+    test_meeting_question_heuristic()
+    test_meeting_llm()
+    test_meeting_assistant_segment(tmp)
     print("\nTOUS LES TESTS PASSENT")
 
 

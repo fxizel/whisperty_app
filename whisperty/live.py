@@ -98,12 +98,14 @@ class LiveTranscriber:
         transcriber,
         on_segment: Optional[Callable[[str, str], None]] = None,
         on_finished: Optional[Callable[[dict], None]] = None,
+        transcript_prefix: str = "live",
     ) -> None:
         self._config = config
         self.cfg = config.live
         self.transcriber = transcriber
         self._on_segment = on_segment
         self._on_finished = on_finished
+        self._transcript_prefix = transcript_prefix or "live"
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._file = None
@@ -226,7 +228,7 @@ class LiveTranscriber:
             folder = self._config.resolve(self.cfg.transcript_dir)
             folder.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = folder / f"live_{stamp}.txt"
+            path = folder / f"{self._transcript_prefix}_{stamp}.txt"
             self._file = path.open("w", encoding="utf-8")
             self._file.write(
                 f"# Transcription live — sortie : {device_name} — "
