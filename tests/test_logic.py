@@ -480,7 +480,7 @@ def test_transcriber_overrides(tmp_path: Path | None = None) -> None:
                 "audio": audio, "language": language,
                 "initial_prompt": initial_prompt, "hotwords": hotwords,
             })
-            seg = _types.SimpleNamespace(text="bonjour scada")
+            seg = _types.SimpleNamespace(text="bonjour scada", start=0.0, end=1.5)
             info = _types.SimpleNamespace(language=language)
             return [seg], info
 
@@ -521,7 +521,12 @@ def test_transcriber_overrides(tmp_path: Path | None = None) -> None:
     except FileNotFoundError:
         pass
     audio_file.unlink()
-    print("[9] transcripteur : overrides de profil + transcribe_file (modèle simulé)  OK")
+
+    # transcribe_segments : segments HORODATÉS (start, end) + corrections par segment.
+    segs = t.transcribe_segments(np.ones(10, dtype=np.float32))
+    assert segs == [(0.0, 1.5, "bonjour SCADA")], segs
+    assert t.transcribe_segments(np.zeros(0, dtype=np.float32)) == []  # audio vide
+    print("[9] transcripteur : overrides + transcribe_file + transcribe_segments (simulé)  OK")
 
 
 # =============================================================================
@@ -590,7 +595,22 @@ def test_config_robustness(tmp_path: Path | None = None) -> None:
     assert h.max_entries == 200
     h.close()
     assert not (base / "never.db").exists()
-    print("[10] robustesse config : profils/numeriques malformes -> defauts surs, zero crash  OK")
+
+    # Coercition des booléens depuis une chaîne (YAML quoté « "false" » ≠ truthy).
+    work2 = base / "tmp_bool.yaml"
+    work2.write_text(
+        yaml.safe_dump({
+            "conference": {"distinguish_speakers": "false", "enabled": "off"},
+            "history": {"enabled": "yes"},
+        }),
+        encoding="utf-8",
+    )
+    loaded2 = Config.load(work2)
+    assert loaded2.conference.distinguish_speakers is False
+    assert loaded2.conference.enabled is False
+    assert loaded2.history.enabled is True
+    work2.unlink()
+    print("[10] robustesse config : profils/numeriques/booleens malformes -> defauts surs  OK")
 
 
 # =============================================================================
@@ -877,6 +897,318 @@ def test_live_com_init(tmp_path: Path | None = None) -> None:
     print("[15] live : COM initialisé sur le worker + repli sans périphérique  OK")
 
 
+# =============================================================================
+# 16) Réunion — mixage double-source (somme + normalisation anti-saturation)
+# =============================================================================
+def test_mix_streams() -> None:
+    import numpy as np
+
+    from whisperty.conference import mix_streams
+
+    # Somme simple (pas de saturation).
+    a = np.array([0.2, 0.2, 0.2], np.float32)
+    b = np.array([0.1, 0.1, 0.1], np.float32)
+    assert np.allclose(mix_streams([a, b]), [0.3, 0.3, 0.3])
+
+    # Normalisation anti-saturation : somme 1.6 → crête ramenée à 1.0.
+    loud = mix_streams([np.full(4, 0.8, np.float32), np.full(4, 0.8, np.float32)])
+    assert abs(float(np.max(np.abs(loud))) - 1.0) < 1e-6
+
+    # Troncature à la longueur du plus court.
+    assert mix_streams([np.ones(5, np.float32), np.ones(3, np.float32)]).shape[0] == 3
+
+    # Source unique (≤ 1) renvoyée inchangée ; cas vides.
+    solo = np.array([0.5, -0.5], np.float32)
+    assert np.allclose(mix_streams([solo]), solo)
+    assert mix_streams([]).size == 0
+    assert mix_streams([np.zeros(0, np.float32), None]).size == 0
+    print("[16] réunion mix_streams : somme + normalisation + troncature + source unique  OK")
+
+
+# =============================================================================
+# 17) Réunion — formatage de l'export
+# =============================================================================
+def test_conference_format() -> None:
+    from whisperty.conference import _transcript_header, format_segment_line
+
+    assert format_segment_line(0, "salut") == "[00:00] salut"
+    assert format_segment_line(75.4, "x") == "[01:15] x"
+    assert format_segment_line(12, "x", speaker="Moi") == "[00:12] Moi : x"  # itération 2
+
+    txt = _transcript_header("Speakers (ASUS)", "micro par défaut", "txt")
+    assert "réunion" in txt.lower() and "Speakers (ASUS)" in txt
+    md = _transcript_header("Spk", "mic", "md")
+    assert md.startswith("# Transcription de réunion")
+    print("[17] réunion format : ligne [MM:SS] (+ locuteur) + en-têtes txt/md  OK")
+
+
+# =============================================================================
+# 18) Réunion — boucle de consommation (mixage → segmentation → transcript)
+# =============================================================================
+def test_conference_consume(tmp_path: Path | None = None) -> None:
+    import time
+
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.export_dir = "conf_out"
+    cfg.conference.distinguish_speakers = False  # ce test cible le chemin MIXÉ (itération 1)
+    cfg.conference.block_duration = 0.1
+    cfg.conference.silence_duration = 0.2
+    cfg.conference.max_segment = 5.0
+    cfg.conference.vad_threshold = 0.01
+
+    class FakeTr:
+        def __init__(self):
+            self.calls = 0
+            self.last = None
+
+        def transcribe(self, audio, profile=None):
+            self.calls += 1
+            self.last = audio
+            return f"seg{self.calls}"
+
+    tr = FakeTr()
+    finished: dict = {}
+    ct = ConferenceTranscriber(cfg, tr, on_finished=lambda r: finished.update(r))
+    ct._active = {"mic", "system"}
+    ct._t0 = time.monotonic()
+    path = ct._open_transcript("FakeSys", "FakeMic")
+
+    # Deux sources alignées (0,4 chacune → mix 0,8, sans saturation).
+    speech = np.full(8000, 0.4, np.float32)
+    ct._buffers["mic"].push(speech.copy())
+    ct._buffers["system"].push(speech.copy())
+
+    ct._stop.set()      # saute la boucle temps réel → vidage final déterministe
+    ct._consume()
+    ct._close_transcript()
+
+    assert tr.calls == 1, tr.calls
+    assert abs(float(np.max(np.abs(tr.last))) - 0.8) < 1e-5   # micro + système mixés
+    content = path.read_text(encoding="utf-8")
+    assert "seg1" in content and "réunion" in content.lower()
+
+    ct._finish("FakeSys", path)
+    assert finished["segments"] == 1 and finished["text"] == "seg1"
+    assert finished["sources"] == ["mic", "system"]
+    assert finished["error"] is None
+    path.unlink()
+    print("[18] réunion consume : mixage 2 sources -> segment -> transcript + on_finished  OK")
+
+
+# =============================================================================
+# 19) Réunion — robustesse : aucune source / alignement / famine / mono / queue finale
+# =============================================================================
+def test_conference_degradation(tmp_path: Path | None = None) -> None:
+    import time
+
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber
+    from whisperty.live import _Segmenter
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.export_dir = "conf_deg"
+    cfg.conference.distinguish_speakers = False  # plomberie de capture/mixage (itération 1)
+    cfg.conference.block_duration = 0.1
+    cfg.conference.silence_duration = 0.2
+    cfg.conference.max_segment = 5.0
+    cfg.conference.vad_threshold = 0.01
+
+    class FakeTr:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, audio, profile=None):
+            self.calls += 1
+            return f"s{self.calls}"
+
+    def speech(n):
+        return np.full(n, 0.4, np.float32)
+
+    # (a) Aucune source active → drain renvoie None (pas de blocage, pas de crash).
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._active = set()
+    assert ct._drain_mixed(8000) is None
+
+    # (b) Alignement : l'excédent de tête de la source en avance (micro) est défaussé.
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._active = {"mic", "system"}
+    ct._buffers["mic"].push(speech(12000))
+    ct._buffers["system"].push(speech(8000))
+    ct._align_sources()
+    assert ct._aligned
+    assert ct._buffers["mic"].available() == 8000 and ct._buffers["system"].available() == 8000
+
+    # (c) Famine : une source muette est retirée après stall_limit ticks (mid-session).
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._active = {"mic", "system"}
+    ct._buffers["mic"].push(speech(8000))  # « system » reste muet
+    stalled = {"mic": 0, "system": 0}
+    ct._drop_stalled_sources(stalled, 2)
+    assert "system" in ct._active            # 1er tick : sursis
+    ct._drop_stalled_sources(stalled, 2)
+    assert ct._active == {"mic"}             # retirée → le mixage continuera sur le micro
+
+    # (d) Mono-source : transcription sur la seule source survivante, sans gel.
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._active = {"mic"}
+    ct._t0 = time.monotonic()
+    path = ct._open_transcript("(aucune)", "FakeMic")
+    ct._buffers["mic"].push(speech(8000))
+    ct._stop.set()                           # saute la boucle live → vidage final déterministe
+    ct._consume()
+    ct._close_transcript()
+    assert ct.transcriber.calls == 1
+    if path is not None:
+        path.unlink()
+
+    # (e) Vidage final : la queue non alignée de la source la plus longue n'est pas perdue.
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._active = {"mic", "system"}
+    ct._t0 = time.monotonic()
+    path = ct._open_transcript("Sys", "Mic")
+    ct._buffers["mic"].push(speech(16000))   # micro plus long (offset / dérive)
+    ct._buffers["system"].push(speech(8000))
+    ct._final_drain(_Segmenter(16000, 0.01, 0.2, 5.0), 1600)
+    assert ct._buffers["mic"].available() == 0 and ct._buffers["system"].available() == 0
+    ct._close_transcript()
+    if path is not None:
+        path.unlink()
+    print("[19] réunion robustesse : aucune source / alignement / famine / mono / queue finale  OK")
+
+
+# =============================================================================
+# 20) Réunion — distinction par source (itération 2) : horodatage + entrelacement
+# =============================================================================
+def test_conference_distinct(tmp_path: Path | None = None) -> None:
+    import time
+
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.export_dir = "conf_dist"
+    cfg.conference.distinguish_speakers = True
+    cfg.conference.block_duration = 0.1
+    cfg.conference.silence_duration = 0.2
+    cfg.conference.max_segment = 5.0
+    cfg.conference.vad_threshold = 0.01
+    cfg.conference.mic_label = "Moi"
+    cfg.conference.system_label = "Interlocuteurs"
+
+    class FakeTr2:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, audio, profile=None):
+            return "x"
+
+        def transcribe_segments(self, audio, profile=None):
+            self.calls += 1
+            # Deux sous-segments dont le second à start > 0 : verrouille abs = chunk_start + start.
+            return [(0.0, 1.0, f"a{self.calls}"), (2.0, 3.0, f"b{self.calls}")]
+
+    # (a) Entrelacement chronologique : segments désordonnés → triés + étiquetés.
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    path = ct._open_transcript("Sys", "Mic")
+    ct._segments = [
+        (5.0, "Interlocuteurs", "B"),
+        (1.0, "Moi", "A"),
+        (3.0, "Interlocuteurs", "C"),
+    ]
+    finished: dict = {}
+    ct._on_finished = lambda r: finished.update(r)
+    ct._close_transcript()
+    ct._finish("Sys", path)
+    assert finished["text"] == "[00:01] Moi : A\n[00:03] Interlocuteurs : C\n[00:05] Interlocuteurs : B"
+    content = path.read_text(encoding="utf-8")
+    assert content.index("Moi : A") < content.index("Interlocuteurs : C") < content.index("Interlocuteurs : B")
+    path.unlink()
+
+    # (b) _emit_distinct : horodatage = (pushed - longueur)/SR + start du sous-segment.
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    ct._t0 = time.monotonic()
+    audio = np.full(8000, 0.4, np.float32)  # 0,5 s
+    ct._emit_distinct("mic", 16000, audio)      # chunk_start = (16000-8000)/16000 = 0,5 s
+    s0, l0, t0_ = ct._segments[0]
+    s1, l1, t1_ = ct._segments[1]
+    assert l0 == "Moi" and abs(s0 - 0.5) < 1e-6 and t0_ == "a1"
+    assert l1 == "Moi" and abs(s1 - 2.5) < 1e-6 and t1_ == "b1"   # 0,5 + start 2,0
+    ct._emit_distinct("system", 48000, audio)   # chunk_start = (48000-8000)/16000 = 2,5 s
+    s2, l2, _ = ct._segments[2]
+    s3, _, _ = ct._segments[3]
+    assert l2 == "Interlocuteurs" and abs(s2 - 2.5) < 1e-6
+    assert abs(s3 - 4.5) < 1e-6                                   # 2,5 + start 2,0
+
+    # (c) Chemin _consume_distinct complet (deux sources) via vidage final déterministe.
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    ct._active = {"mic", "system"}
+    ct._t0 = time.monotonic()
+    path = ct._open_transcript("Sys", "Mic")
+    speech = np.full(8000, 0.4, np.float32)
+    ct._buffers["mic"].push(speech.copy())
+    ct._buffers["system"].push(speech.copy())
+    ct._stop.set()
+    ct._consume_distinct()
+    ct._close_transcript()
+    assert {lbl for _, lbl, _ in ct._segments} == {"Moi", "Interlocuteurs"}
+    if path is not None:
+        path.unlink()
+
+    # (d) Mode distinction MONO-source (une seule source) : pas de KeyError, étiquette correcte.
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    ct._active = {"mic"}
+    ct._t0 = time.monotonic()
+    path = ct._open_transcript("(aucune)", "Mic")
+    ct._buffers["mic"].push(np.full(8000, 0.4, np.float32))
+    ct._stop.set()
+    ct._consume_distinct()
+    ct._close_transcript()
+    assert ct._segments and all(lbl == "Moi" for _, lbl, _ in ct._segments)
+    if path is not None:
+        path.unlink()
+
+    # (e) Export Markdown trié : en-tête md + lignes chronologiques.
+    cfg.conference.export_format = "md"
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    path = ct._open_transcript("Sys", "Mic")
+    ct._segments = [(2.0, "Interlocuteurs", "Z"), (1.0, "Moi", "A")]
+    ct._on_finished = None
+    ct._close_transcript()
+    ct._finish("Sys", path)
+    content = path.read_text(encoding="utf-8")
+    assert content.startswith("# Transcription de réunion")
+    assert content.index("Moi : A") < content.index("Interlocuteurs : Z")
+    if path is not None:
+        path.unlink()
+    cfg.conference.export_format = "txt"
+
+    # (f) Libellés de locuteur configurables (propagés de bout en bout).
+    cfg.conference.mic_label = "Alice"
+    cfg.conference.system_label = "Bob"
+    ct = ConferenceTranscriber(cfg, FakeTr2())
+    ct._t0 = time.monotonic()
+    ct._emit_distinct("mic", 8000, np.full(8000, 0.4, np.float32))
+    ct._emit_distinct("system", 8000, np.full(8000, 0.4, np.float32))
+    labels = {lbl for _, lbl, _ in ct._segments}
+    assert labels == {"Alice", "Bob"}, labels
+    print("[20] réunion distinction : horodatage, entrelacement, mono, md, libellés configurables  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -897,6 +1229,11 @@ def _run_all() -> None:
     test_live_consume(tmp)
     test_live_consume_robust(tmp)
     test_live_com_init(tmp)
+    test_mix_streams()
+    test_conference_format()
+    test_conference_consume(tmp)
+    test_conference_degradation(tmp)
+    test_conference_distinct(tmp)
     print("\nTOUS LES TESTS PASSENT")
 
 

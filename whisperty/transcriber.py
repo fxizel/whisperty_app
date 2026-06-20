@@ -118,12 +118,21 @@ class Transcriber:
         # faster-whisper accepte directement un chemin et décode via PyAV.
         return self._run(str(p), None)
 
-    def _run(self, audio, profile: Optional["ResolvedProfile"]) -> str:
-        """Cœur commun (signal mémoire ou chemin fichier) : ASR + post-traitement."""
-        self.load()
-        assert self._model is not None
+    def transcribe_segments(
+        self, audio: np.ndarray, profile: Optional["ResolvedProfile"] = None
+    ) -> list[tuple[float, float, str]]:
+        """Comme :meth:`transcribe`, mais renvoie les **segments horodatés**.
 
-        # Paramètres effectifs : profil de contexte si fourni, sinon défauts de l'instance.
+        Liste de ``(start, end, texte_corrigé)`` en secondes (relatives au début du
+        signal fourni). Requis par le mode réunion (itération 2) pour entrelacer
+        chronologiquement deux sources. ``transcribe()`` jette ces horodatages.
+        """
+        if audio is None or audio.size == 0:
+            return []
+        return self._run_segments(audio, profile)
+
+    def _resolve_params(self, profile: Optional["ResolvedProfile"]):
+        """Paramètres effectifs : profil de contexte si fourni, sinon défauts de l'instance."""
         if profile is not None:
             initial_prompt = (
                 profile.initial_prompt
@@ -138,8 +147,14 @@ class Transcriber:
             language = self.cfg.language
             hotword_list = self._hotwords
             replacements = self._replacements
-
         hotwords = ", ".join(hotword_list) if hotword_list else None
+        return initial_prompt, language, hotwords, replacements
+
+    def _run(self, audio, profile: Optional["ResolvedProfile"]) -> str:
+        """Cœur commun (signal mémoire ou chemin fichier) : ASR + post-traitement → texte."""
+        self.load()
+        assert self._model is not None
+        initial_prompt, language, hotwords, replacements = self._resolve_params(profile)
         segments, info = self._model.transcribe(
             audio,
             language=language,
@@ -155,3 +170,29 @@ class Transcriber:
             len(text), getattr(info, "language", language),
         )
         return text
+
+    def _run_segments(
+        self, audio, profile: Optional["ResolvedProfile"]
+    ) -> list[tuple[float, float, str]]:
+        """Variante horodatée : renvoie les segments (start, end, texte corrigé)."""
+        self.load()
+        assert self._model is not None
+        initial_prompt, language, hotwords, replacements = self._resolve_params(profile)
+        segments, _ = self._model.transcribe(
+            audio,
+            language=language,
+            beam_size=self.cfg.beam_size,
+            initial_prompt=initial_prompt,
+            hotwords=hotwords,
+            vad_filter=True,
+        )
+        out: list[tuple[float, float, str]] = []
+        # Corrections appliquées PAR sous-segment (et non sur le texte joint comme _run) :
+        # nécessaire pour conserver les timestamps. Limite assumée : une correction
+        # multi-mots dont l'expression chevauche deux sous-segments Whisper ne s'applique
+        # pas ici (cas rare — Whisper coupe aux frontières de phrase/silence).
+        for segment in segments:
+            text = apply_corrections(segment.text.strip(), replacements)
+            if text:
+                out.append((float(segment.start), float(segment.end), text))
+        return out

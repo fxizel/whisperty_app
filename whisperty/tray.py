@@ -17,6 +17,7 @@ class TrayState(Enum):
     RECORDING = "recording"
     PROCESSING = "processing"
     LIVE = "live"
+    CONFERENCE = "conference"
 
 
 _COLORS = {
@@ -24,12 +25,14 @@ _COLORS = {
     TrayState.RECORDING: (220, 40, 40),    # rouge : enregistrement
     TrayState.PROCESSING: (230, 150, 30),  # orange : transcription
     TrayState.LIVE: (40, 90, 220),         # bleu : transcription live (sortie audio)
+    TrayState.CONFERENCE: (30, 170, 120),  # vert : réunion (micro + sortie)
 }
 _TITLES = {
     TrayState.IDLE: "Whisperty — prêt",
     TrayState.RECORDING: "Whisperty — enregistrement…",
     TrayState.PROCESSING: "Whisperty — transcription…",
     TrayState.LIVE: "Whisperty — transcription live…",
+    TrayState.CONFERENCE: "Whisperty — réunion en cours…",
 }
 
 
@@ -57,6 +60,8 @@ class Tray:
         on_start_live: Optional[Callable[[Optional[object]], None]] = None,
         on_stop_live: Optional[Callable[[], None]] = None,
         live_devices: Optional[list[dict]] = None,
+        on_start_conference: Optional[Callable[[Optional[object]], None]] = None,
+        on_stop_conference: Optional[Callable[[], None]] = None,
     ) -> None:
         from pystray import Icon, Menu, MenuItem
 
@@ -71,8 +76,19 @@ class Tray:
             MenuItem("Démarrer / Arrêter la dictée", _action(on_toggle)),
             MenuItem(
                 "Transcription live (sortie audio)",
-                self._build_live_submenu(Menu, MenuItem, on_start_live, on_stop_live, live_devices),
+                self._build_capture_submenu(
+                    Menu, MenuItem, on_start_live, on_stop_live, live_devices,
+                    "Arrêter la transcription live",
+                ),
                 enabled=on_start_live is not None,
+            ),
+            MenuItem(
+                "Transcription de réunion (micro + sortie)",
+                self._build_capture_submenu(
+                    Menu, MenuItem, on_start_conference, on_stop_conference, live_devices,
+                    "Arrêter la réunion",
+                ),
+                enabled=on_start_conference is not None,
             ),
             MenuItem(
                 "Importer un fichier audio…",
@@ -103,22 +119,26 @@ class Tray:
         )
 
     @staticmethod
-    def _build_live_submenu(Menu, MenuItem, on_start_live, on_stop_live, live_devices):
-        """Sous-menu de la transcription live : choix de la sortie + arrêt."""
+    def _build_capture_submenu(Menu, MenuItem, on_start, on_stop, devices, stop_label):
+        """Sous-menu générique « capture de sortie » : choix de la sortie + arrêt.
+
+        Partagé par la transcription live et la réunion (la sortie système à capturer
+        est choisie de la même façon). ``on_start(spec)`` reçoit None (défaut) ou un index.
+        """
         def start_with(spec):
-            # spec capturé par défaut d'argument pour éviter la capture tardive de boucle.
-            return lambda icon, item: on_start_live(spec) if on_start_live else None
+            # spec figé par défaut d'argument : évite la capture tardive de variable de boucle.
+            return lambda icon, item, spec=spec: on_start(spec) if on_start else None
 
         items = [MenuItem("Démarrer — sortie par défaut", start_with(None))]
-        for dev in (live_devices or []):
+        for dev in (devices or []):
             label = dev["name"] + (" (défaut)" if dev.get("is_default") else "")
             items.append(MenuItem(label, start_with(dev["index"])))
         items.append(Menu.SEPARATOR)
         items.append(
             MenuItem(
-                "Arrêter la transcription live",
-                lambda icon, item: on_stop_live() if on_stop_live else None,
-                enabled=on_stop_live is not None,
+                stop_label,
+                lambda icon, item: on_stop() if on_stop else None,
+                enabled=on_stop is not None,
             )
         )
         return Menu(*items)

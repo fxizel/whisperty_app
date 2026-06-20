@@ -99,3 +99,26 @@ live:
   silence_duration: 0.8   # silence (s) marquant la fin d'un segment (frontière de phrase)
   vad_threshold: 0.008    # seuil RMS de détection de parole
   transcript_dir: transcriptions   # dossier des transcripts live
+
+conference:
+  # Mode RÉUNION : capture SIMULTANÉE du micro (ma voix) ET d'une sortie système
+  # (loopback = interlocuteurs distants, ex. Teams/Meet/Zoom). Itération 1 : les deux
+  # sources sont MIXÉES en une transcription continue (sans étiquette de locuteur).
+  # Enregistrement long, démarré/arrêté manuellement via le menu tray. NE PAS injecter :
+  # le texte est exporté (transcript horodaté) + historisé. 100 % local.
+  # Pensez au CONSENTEMENT des participants. Si une source manque, l'autre est utilisée seule.
+  enabled: true
+  system_device: null     # sortie à capturer (null = défaut ; index/nom comme 'live')
+  mic_device: null        # micro (null = défaut ; index/nom)
+  block_duration: 0.5
+  max_segment: 20
+  silence_duration: 0.8
+  vad_threshold: 0.008
+  export_dir: transcriptions   # dossier des transcripts de réunion
+  export_format: txt           # txt | md
+  # Distinction des locuteurs PAR SOURCE (itération 2), sans mixage : le micro et la
+  # sortie sont transcrits séparément puis entrelacés chronologiquement. 100 % local,
+  # déterministe (pas de diarisation par modèle). false = itération 1 (mixage en une voix).
+  distinguish_speakers: true
+  mic_label: "Moi"
+  system_label: "Interlocuteurs"

@@ -28,6 +28,7 @@ navigateur…) **sans qu'aucune donnée ne quitte la machine**.
 - 🤖 **Mode IA local optionnel** — reponctuation/correction via un LLM **sur la machine** (Ollama, LM Studio…). Désactivé par défaut ; **seuls les endpoints locaux sont acceptés** (la confidentialité interdit tout envoi distant).
 - 🎯 **Profils de contexte** — l'`initial_prompt`, la langue et le dictionnaire s'adaptent à l'application active (profil « code » dans VS Code, « mail » dans Outlook…).
 - 🔊 **Transcription live d'une sortie audio** — capture le son qui **sort** d'un périphérique de ton choix (loopback WASAPI) pour retranscrire en continu une confcall **Teams/Meet** sans importer de fichier. Le transcript s'écrit au fil de l'eau et est copié + historisé à l'arrêt. 100 % local.
+- 🧑‍🤝‍🧑 **Mode réunion** — capture **simultanément le micro (ta voix) ET une sortie système** (les interlocuteurs distants) pour transcrire une réunion complète, exportée en `.txt`/`.md` horodaté + historisée. Par défaut, **distinction par source** : `[MM:SS] Moi : …` / `[MM:SS] Interlocuteurs : …`, entrelacés chronologiquement (déterministe, 100 % local, sans modèle de diarisation). Réglable en transcription mixée (`conference.distinguish_speakers: false`).
 
 ## Prérequis système (Windows)
 

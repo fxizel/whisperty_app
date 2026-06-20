@@ -112,6 +112,10 @@ class AudioRecorder:
     device: Optional[Union[int, str]] = None
     blocksize: int = 1600
     level_callback: Optional[Callable[[float], None]] = None
+    # Mode streaming : si défini, chaque bloc capté (au format natif) est passé à ce
+    # callback et N'EST PAS conservé en mémoire (enregistrement long → RAM bornée,
+    # cf. mode réunion). Si None, comportement batch historique (accumulation + stop()).
+    frame_callback: Optional[Callable[[np.ndarray], None]] = None
 
     _stream: Optional["sd.InputStream"] = field(default=None, init=False, repr=False)
     _frames: list = field(default_factory=list, init=False, repr=False)
@@ -133,6 +137,12 @@ class AudioRecorder:
         """Dernier niveau RMS mesuré (0.0–1.0)."""
         return self._level
 
+    @property
+    def capture_rate(self) -> int:
+        """Fréquence réelle de capture (Hz). Peut différer de ``samplerate`` si le
+        périphérique n'expose pas 16 kHz ; en mode streaming, l'appelant rééchantillonne."""
+        return self._capture_rate
+
     def is_silent(self, threshold: float = 0.01) -> bool:
         """Vrai si le dernier bloc est sous le seuil (VAD simple)."""
         return self._level < threshold
@@ -143,7 +153,15 @@ class AudioRecorder:
             logger.debug("Statut flux audio : %s", status)
         # Copie indispensable : le tampon `indata` est réutilisé par PortAudio.
         block = indata.copy()
-        self._frames.append(block)
+        # Mode streaming (frame_callback) : on transmet le bloc sans le conserver, pour
+        # borner la RAM sur un enregistrement long. Sinon mode batch (accumulation).
+        if self.frame_callback is not None:
+            try:
+                self.frame_callback(block)
+            except Exception:  # un callback fautif ne doit pas tuer le flux audio
+                logger.exception("frame_callback a levé une exception")
+        else:
+            self._frames.append(block)
         # Niveau RMS du bloc (tous canaux confondus) pour le VAD / l'animation tray.
         self._level = float(np.sqrt(np.mean(np.square(block)))) if block.size else 0.0
         if self.level_callback is not None:

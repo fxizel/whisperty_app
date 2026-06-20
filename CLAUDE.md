@@ -51,6 +51,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
 | `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
+| `conference.py` | Mode réunion : micro + sortie système simultanés, mixés (itération 1) | fait (V2) |
 
 ## Concurrence (à préserver)
 
@@ -89,6 +90,24 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   La transcription live (`live.py`) est un **mode exclusif** de la dictée (état `TrayState.LIVE`) ;
   les segments sont découpés par un VAD RMS et transcrits avec les défauts de base (pas de profil,
   pas de LLM — priorité à la latence).
+- **Réunion (V2, `conference.py`)** : mode exclusif `TrayState.CONFERENCE` capturant SIMULTANÉMENT
+  le micro (`AudioRecorder` en mode streaming `frame_callback` → RAM bornée + `_resample` 16 kHz) et
+  une sortie système (`loopback`/`soundcard`, COM via `com_initialized()` sur son thread). Itération 1 :
+  les deux sources alimentent des tampons thread-safe, un mixeur draine une longueur **alignée**
+  (min des sources actives), **mixe** (somme + normalisation anti-saturation `mix_streams`), segmente
+  (réutilise `_Segmenter`) et transcrit → UNE transcription, sans étiquette. NE PAS injecter : export
+  `.txt`/`.md` horodaté + historique `source="réunion"`. Échec d'une source → l'autre seule. Arrêt
+  comme live (callback de fin, pas de `join()` sous `_lock`). Robustesse : calage temporel des deux
+  flux au démarrage, retrait d'une source morte en cours (sinon le mixage aligné gèlerait), reliquats
+  drainés à l'arrêt.
+- **Réunion — distinction par locuteur (V2, itération 2)** : `conference.distinguish_speakers: true`
+  (défaut recommandé) → PAS de mixage ; chaque source a son propre `_Segmenter`, est transcrite via
+  `transcriber.transcribe_segments()` (variante horodatée conservant `segment.start/end`), horodatée
+  par position audio (échantillons poussés), puis les segments sont **entrelacés chronologiquement**
+  (tri à l'arrêt + réécriture triée du transcript) : `[MM:SS] Moi : …` / `[MM:SS] Interlocuteurs : …`.
+  Distinction PAR SOURCE uniquement (micro = `mic_label`, sortie = `system_label`) — déterministe,
+  100 % local. La diarisation des interlocuteurs individuels (pyannote = PyTorch + modèles *gated* HF)
+  est **écartée** (tension zéro-réseau) ; à n'envisager qu'en option hors-ligne désactivée par défaut.
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.

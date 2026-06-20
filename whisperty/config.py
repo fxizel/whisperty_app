@@ -129,6 +129,27 @@ class LiveConfig:
 
 
 @dataclass
+class ConferenceConfig:
+    """Mode réunion : capture micro + sortie système simultanés (V2)."""
+
+    enabled: bool = True
+    system_device: Optional[Union[int, str]] = None  # sortie à capturer (null = défaut)
+    mic_device: Optional[Union[int, str]] = None      # micro (null = défaut)
+    block_duration: float = 0.5
+    max_segment: float = 20.0
+    silence_duration: float = 0.8
+    vad_threshold: float = 0.008
+    export_dir: str = "transcriptions"                # dossier des transcripts de réunion
+    export_format: str = "txt"                         # txt | md
+    # Itération 2 : distinguer les locuteurs PAR SOURCE (micro / sortie), sans mixage.
+    # True (recommandé, 100 % local) = transcription séparée + entrelacement chronologique
+    # « Moi » / « Interlocuteurs ». False = itération 1 (mixage en une transcription).
+    distinguish_speakers: bool = True
+    mic_label: str = "Moi"
+    system_label: str = "Interlocuteurs"
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -140,6 +161,7 @@ class Config:
     ai: AIConfig = field(default_factory=AIConfig)
     profiles: ProfilesConfig = field(default_factory=ProfilesConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    conference: ConferenceConfig = field(default_factory=ConferenceConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -167,6 +189,7 @@ class Config:
             ai=_build(AIConfig, data.get("ai")),
             profiles=_build_profiles(data.get("profiles")),
             live=_build(LiveConfig, data.get("live")),
+            conference=_build(ConferenceConfig, data.get("conference")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
         return cfg
@@ -200,12 +223,34 @@ def _build(dc_type, raw):
     return dc_type(**kwargs)
 
 
+_BOOL_TRUE = {"true", "1", "yes", "on", "oui", "vrai"}
+_BOOL_FALSE = {"false", "0", "no", "off", "non", "faux", ""}
+
+
 def _coerce(dc_type, field_obj, value):
-    """Coerce ``value`` vers le type numérique du champ (best-effort, repli sur le défaut)."""
+    """Coerce ``value`` vers le type du champ (best-effort, repli sur le défaut)."""
     default = field_obj.default
-    if default is MISSING or isinstance(default, bool):
-        # Pas de défaut scalaire (ex. champ à default_factory) ou booléen : on ne touche pas.
+    if default is MISSING:
+        # Pas de défaut scalaire (ex. champ à default_factory) : on ne touche pas.
         return value
+    # bool d'abord (bool est une sous-classe d'int) : une chaîne YAML quotée « "false" »
+    # serait sinon « truthy ». On interprète explicitement les formes courantes.
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            low = value.strip().lower()
+            if low in _BOOL_TRUE:
+                return True
+            if low in _BOOL_FALSE:
+                return False
+        elif isinstance(value, (int, float)):
+            return bool(value)
+        logger.warning(
+            "%s.%s : booléen %r non reconnu ; défaut %r utilisé.",
+            dc_type.__name__, field_obj.name, value, default,
+        )
+        return default
     target = None
     if isinstance(default, int):
         target = int

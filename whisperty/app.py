@@ -20,6 +20,7 @@ import threading
 import time
 
 from .ai import LocalLLM
+from .conference import ConferenceTranscriber
 from .config import Config
 from .history import History
 from .injector import TextInjector
@@ -73,6 +74,10 @@ class WhispertyApp:
         self.live = LiveTranscriber(
             config, self.transcriber, on_finished=self._on_live_finished
         )
+        # V2 : mode réunion (micro + sortie système simultanés).
+        self.conference = ConferenceTranscriber(
+            config, self.transcriber, on_finished=self._on_conference_finished
+        )
         live_devices = list_speakers()  # best-effort (liste vide si soundcard absent)
         self.tray = Tray(
             on_toggle=self.toggle,
@@ -84,6 +89,8 @@ class WhispertyApp:
             on_start_live=self.start_live,
             on_stop_live=self.stop_live,
             live_devices=live_devices,
+            on_start_conference=self.start_conference if config.conference.enabled else None,
+            on_stop_conference=self.stop_conference if config.conference.enabled else None,
         )
         # État protégé par un verrou réentrant (transitions multi-threads).
         self._state = TrayState.IDLE
@@ -111,6 +118,8 @@ class WhispertyApp:
                 self._stop_and_process()
             elif self._state is TrayState.LIVE:
                 logger.info("Dictée ignorée : transcription live en cours.")
+            elif self._state is TrayState.CONFERENCE:
+                logger.info("Dictée ignorée : réunion en cours.")
             else:  # PROCESSING
                 logger.info("Dictée ignorée : transcription/chargement en cours.")
 
@@ -368,6 +377,66 @@ class WhispertyApp:
         else:
             self.tray.notify("Transcription live arrêtée — aucun texte transcrit.")
 
+    # -- mode réunion (V2) -----------------------------------------------------
+    def start_conference(self, device_spec: object = None) -> None:
+        """Démarre la transcription de réunion (micro + sortie système), menu tray.
+
+        ``device_spec`` : None = sortie configurée/par défaut ; index = sortie choisie.
+        Mode exclusif, comme la transcription live.
+        """
+        if device_spec is None:
+            device_spec = self.config.conference.system_device
+        with self._lock:
+            if self._quitting:
+                return
+            if self._state is not TrayState.IDLE:
+                logger.info("Réunion ignorée : une autre opération est en cours.")
+                self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
+                return
+            self._set_state(TrayState.CONFERENCE)
+        # Rappel consentement (tout reste local).
+        self.tray.notify(
+            "Réunion : pensez au consentement des participants. Tout reste local."
+        )
+        if not self.conference.start(device_spec):
+            logger.warning("Le mode réunion n'a pas pu démarrer.")
+            with self._lock:
+                if self._state is TrayState.CONFERENCE:
+                    self._set_state(TrayState.IDLE)
+
+    def stop_conference(self) -> None:
+        """Arrête la transcription de réunion (menu tray)."""
+        with self._lock:
+            if self._state is not TrayState.CONFERENCE:
+                return
+        # Idem live : pas de verrou ni de join() ici ; _on_conference_finished repassera IDLE.
+        self.conference.stop()
+
+    def _on_conference_finished(self, result: dict) -> None:
+        """Callback de fin de réunion (appelé depuis le thread de réunion)."""
+        with self._lock:
+            if self._state is TrayState.CONFERENCE:
+                self._set_state(TrayState.IDLE)
+        error = result.get("error")
+        if error:
+            self.tray.notify(f"Réunion arrêtée : {error}")
+            return
+        text = result.get("text") or ""
+        count = result.get("segments", 0)
+        device = result.get("device")
+        path = result.get("path")
+        sources = ", ".join(result.get("sources", [])) or "aucune"
+        if text:
+            self.history.add(
+                text, source="réunion", app=device, model=self.config.transcription.model
+            )
+        if path:
+            self.tray.notify(
+                f"Réunion terminée — {count} segment(s) (sources : {sources}). Transcript : {path}"
+            )
+        else:
+            self.tray.notify(f"Réunion terminée — {count} segment(s) (sources : {sources}).")
+
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
         """Copie la dernière transcription dans le presse-papiers (menu tray)."""
@@ -413,6 +482,13 @@ class WhispertyApp:
             # Arrête la transcription live et attend la fin du thread (flush du transcript).
             self.live.stop()
             self.live.wait(timeout=5.0)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # Idem pour le mode réunion. Budget > pire cas du worker (résolution loopback
+            # ~6 s + join du thread système 2 s) pour que l'historique soit écrit AVANT close().
+            self.conference.stop()
+            self.conference.wait(timeout=10.0)
         except Exception:  # noqa: BLE001
             pass
         try:
