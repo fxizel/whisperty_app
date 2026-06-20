@@ -48,4 +48,42 @@ dictionary:
 logging:
   level: INFO             # DEBUG | INFO | WARNING | ERROR
   path: logs/whisperty.log
-  max_history: 200        # nb max de transcriptions conservées (V2, SQLite)
+  max_history: 200        # (obsolète) remplacé par history.max_entries ci-dessous
+
+# --- V2 -----------------------------------------------------------------------
+
+history:
+  enabled: true           # archive chaque transcription dans une base SQLite locale
+  path: whisperty.db      # fichier de la base (à côté de config.yaml par défaut)
+  max_entries: 200        # nb max de transcriptions conservées (purge automatique)
+
+ai:
+  # Raffinage optionnel par un LLM 100 % LOCAL (reponctuation, casse, fautes).
+  # CONFIDENTIALITÉ : seuls les endpoints locaux (localhost/127.0.0.1) sont acceptés ;
+  # tout autre hôte est refusé. Désactivé par défaut.
+  enabled: false
+  # Endpoint compatible OpenAI d'un serveur local : Ollama (11434), LM Studio (1234),
+  # llama.cpp server… Exemple Ollama : http://localhost:11434/v1/chat/completions
+  endpoint: "http://localhost:11434/v1/chat/completions"
+  model: "llama3.2"       # nom du modèle servi localement
+  prompt: >-
+    Tu corriges la ponctuation, la casse et les fautes évidentes d'un texte dicté
+    en français. Ne reformule pas, n'ajoute rien, ne réponds que par le texte corrigé.
+  timeout: 30             # secondes ; en cas d'échec, le texte brut est conservé
+
+profiles:
+  # Profils de contexte appliqués selon l'application active au DÉMARRAGE de la dictée.
+  # 'match' = sous-chaînes (insensibles à la casse) du nom de l'exécutable (ex. "code.exe").
+  # Le premier profil correspondant gagne ; sinon le contexte par défaut s'applique.
+  enabled: false
+  definitions:
+    - name: code
+      match: ["code.exe", "devenv.exe", "windowsterminal.exe"]
+      initial_prompt: "Contexte : code source, anglicismes techniques, noms de variables et de fonctions."
+      # language: fr        # surcharge optionnelle de la langue
+      hotwords: ["commit", "merge", "pull request", "refactor"]
+      # corrections: { "git ube": "GitHub" }   # corrections inline
+      # dictionary: code_dico.txt              # ou un dictionnaire propre au profil
+    - name: mail
+      match: ["outlook.exe", "thunderbird.exe", "hxoutlook.exe"]
+      initial_prompt: "Contexte : courriel professionnel, formules de politesse, noms propres."

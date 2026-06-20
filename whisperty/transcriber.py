@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 
 from .config import Config, TranscriptionConfig
 from .dictionary import apply_corrections, load_dictionary
+
+if TYPE_CHECKING:
+    from .profiles import ResolvedProfile
 
 logger = logging.getLogger(__name__)
 
@@ -90,26 +94,64 @@ class Transcriber:
             ) from exc
         logger.info("Modèle Whisper chargé.")
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        """Transcrit un signal mono 16 kHz float32 et renvoie le texte corrigé."""
+    def transcribe(
+        self, audio: np.ndarray, profile: Optional["ResolvedProfile"] = None
+    ) -> str:
+        """Transcrit un signal mono 16 kHz float32 et renvoie le texte corrigé.
+
+        ``profile`` (optionnel) surcharge l'``initial_prompt``, la langue et le
+        dictionnaire pour cette dictée (profils de contexte par application).
+        """
         if audio is None or audio.size == 0:
             return ""
+        return self._run(audio, profile)
+
+    def transcribe_file(self, path: Union[str, Path]) -> str:
+        """Transcrit un fichier audio existant (WAV, MP3, M4A…) et renvoie le texte.
+
+        Le décodage/rééchantillonnage est délégué à faster-whisper (PyAV embarqué) :
+        aucune dépendance ni ffmpeg requis. Utilise le dictionnaire de base.
+        """
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"Fichier audio introuvable : {p}")
+        # faster-whisper accepte directement un chemin et décode via PyAV.
+        return self._run(str(p), None)
+
+    def _run(self, audio, profile: Optional["ResolvedProfile"]) -> str:
+        """Cœur commun (signal mémoire ou chemin fichier) : ASR + post-traitement."""
         self.load()
         assert self._model is not None
 
-        hotwords = ", ".join(self._hotwords) if self._hotwords else None
+        # Paramètres effectifs : profil de contexte si fourni, sinon défauts de l'instance.
+        if profile is not None:
+            initial_prompt = (
+                profile.initial_prompt
+                if profile.initial_prompt is not None
+                else self.cfg.initial_prompt
+            )
+            language = profile.language or self.cfg.language
+            hotword_list = profile.hotwords
+            replacements = profile.replacements
+        else:
+            initial_prompt = self.cfg.initial_prompt
+            language = self.cfg.language
+            hotword_list = self._hotwords
+            replacements = self._replacements
+
+        hotwords = ", ".join(hotword_list) if hotword_list else None
         segments, info = self._model.transcribe(
             audio,
-            language=self.cfg.language,
+            language=language,
             beam_size=self.cfg.beam_size,
-            initial_prompt=self.cfg.initial_prompt,
+            initial_prompt=initial_prompt,
             hotwords=hotwords,
             vad_filter=True,  # VAD Silero intégré : ignore les silences
         )
         text = "".join(segment.text for segment in segments).strip()
-        text = apply_corrections(text, self._replacements)
+        text = apply_corrections(text, replacements)
         logger.info(
             "Transcription : %d caractères (langue=%s).",
-            len(text), getattr(info, "language", self.cfg.language),
+            len(text), getattr(info, "language", language),
         )
         return text

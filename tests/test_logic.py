@@ -249,7 +249,7 @@ def test_state_machine() -> None:
         def load(self):
             pass
 
-        def transcribe(self, audio):
+        def transcribe(self, audio, profile=None):
             return ""
 
     rec = FakeRecorder()
@@ -297,6 +297,294 @@ def test_key_variants_and_imports() -> None:
     print("[4] variantes de touches + import complet de la chaîne  OK")
 
 
+# =============================================================================
+# 6) Historique SQLite (V2)
+# =============================================================================
+def test_history(tmp_path: Path | None = None) -> None:
+    from whisperty.history import History
+
+    base = tmp_path or Path(__file__).resolve().parent
+    db = base / "hist.db"
+    if db.exists():
+        db.unlink()
+
+    h = History(db, max_entries=3, enabled=True)
+    assert h.recent() == [] and h.last_text() is None  # base vide
+
+    for i in range(5):
+        h.add(f"texte {i}", source="dictée", app="Code.exe", model="small")
+    rec = h.recent(10)
+    assert len(rec) == 3, len(rec)                    # purge à max_entries
+    assert rec[0].text == "texte 4"                   # plus récent en tête
+    assert rec[0].app == "Code.exe" and rec[0].model == "small"
+    assert h.last_text() == "texte 4"
+
+    h.add("")                                          # texte vide ignoré
+    assert len(h.recent(10)) == 3
+
+    h.clear()
+    assert h.recent() == []
+
+    h2 = History(base / "off.db", enabled=False)       # désactivé = no-op
+    h2.add("x")
+    assert h2.recent() == [] and h2.last_text() is None
+    assert not (base / "off.db").exists()              # aucun fichier créé si désactivé
+
+    h.close()
+    h2.close()
+    db.unlink()
+    print("[6] historique SQLite : add/recent/last_text/purge/clear + désactivé  OK")
+
+
+# =============================================================================
+# 7) Profils de contexte (V2)
+# =============================================================================
+def test_profiles() -> None:
+    from whisperty.config import Config, ProfileDef, ProfilesConfig
+    from whisperty.profiles import ProfileResolver
+
+    cfg = Config()
+    cfg.dictionary.enabled = False  # isole le test du dictionary.txt du dépôt
+    cfg.profiles = ProfilesConfig(
+        enabled=True,
+        definitions=[
+            ProfileDef(
+                name="code", match=["code.exe", "devenv.exe"],
+                initial_prompt="CONTEXTE CODE", hotwords=["commit"],
+                corrections={"git ube": "GitHub"},
+            ),
+            ProfileDef(name="mail", match=["outlook.exe"], initial_prompt="CONTEXTE MAIL"),
+        ],
+    )
+    resolver = ProfileResolver(cfg)
+
+    # Correspondance (insensible à la casse) → profil "code"
+    prof = resolver.for_app("Code.exe")
+    assert prof is not None and prof.name == "code"
+    assert prof.initial_prompt == "CONTEXTE CODE"
+    assert "commit" in prof.hotwords
+    assert prof.replacements["git ube"] == "GitHub"
+
+    # Pas de correspondance → profil par défaut (hérite, prompt None)
+    default = resolver.for_app("explorer.exe")
+    assert default is not None and default.name == "(défaut)"
+    assert default.initial_prompt is None
+
+    # app inconnue/None sans match → défaut
+    assert resolver.for_app(None).name == "(défaut)"
+
+    # Profils désactivés → None (le transcripteur utilise ses propres défauts)
+    assert ProfileResolver(Config()).for_app("Code.exe") is None
+    print("[7] profils de contexte : match (casse), défaut, désactivé  OK")
+
+
+# =============================================================================
+# 8) Mode IA local — garde de confidentialité (V2)
+# =============================================================================
+def test_ai_local_guard() -> None:
+    import json
+
+    import whisperty.ai as ai_mod
+    from whisperty.ai import LocalLLM, is_local_endpoint
+    from whisperty.config import AIConfig
+
+    # Garde : seuls les hôtes locaux sont reconnus.
+    assert is_local_endpoint("http://localhost:11434/v1/chat/completions")
+    assert is_local_endpoint("http://127.0.0.1:1234/v1/chat/completions")
+    assert is_local_endpoint("http://[::1]:11434/v1/chat/completions")
+    assert not is_local_endpoint("http://api.openai.com/v1/chat/completions")
+    assert not is_local_endpoint("https://example.com/x")
+    assert not is_local_endpoint("ftp://localhost/x")
+
+    # Désactivé → texte inchangé, aucun appel réseau.
+    assert LocalLLM(AIConfig(enabled=False)).refine("salut") == "salut"
+
+    # Activé mais endpoint DISTANT → refus (confidentialité), texte conservé.
+    remote = LocalLLM(AIConfig(enabled=True, endpoint="http://evil.example.com/v1/chat/completions"))
+    assert remote.refine("texte secret") == "texte secret"
+
+    # Activé + local + opener simulé → utilise la réponse, et n'appelle que localhost.
+    captured: dict = {}
+
+    class _FakeResp:
+        def __init__(self, payload, url="http://localhost:11434/v1/chat/completions"):
+            self._b = json.dumps(payload).encode("utf-8")
+            self._url = url
+
+        def read(self):
+            return self._b
+
+        def geturl(self):
+            return self._url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_open(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp({"choices": [{"message": {"content": "Salut, ça va ?"}}]})
+
+    original = ai_mod._OPENER
+    ai_mod._OPENER = types.SimpleNamespace(open=fake_open)
+    try:
+        llm = LocalLLM(AIConfig(enabled=True, endpoint="http://localhost:11434/v1/chat/completions"))
+        assert llm.refine("salut ca va") == "Salut, ça va ?"
+        assert "localhost" in captured["url"]
+        assert captured["payload"]["messages"][1]["content"] == "salut ca va"
+
+        # Défense en profondeur : si l'URL finale n'est pas locale (redirection), on ignore.
+        def fake_open_remote(req, timeout=None):
+            return _FakeResp({"choices": [{"message": {"content": "NE DOIT PAS PASSER"}}]},
+                             url="http://evil.example.com/x")
+
+        ai_mod._OPENER = types.SimpleNamespace(open=fake_open_remote)
+        assert llm.refine("secret") == "secret"
+    finally:
+        ai_mod._OPENER = original
+    print("[8] IA locale : garde localhost + URL finale locale + désactivé + réponse  OK")
+
+
+# =============================================================================
+# 9) Transcripteur — overrides de profil + transcribe_file (V2, modèle simulé)
+# =============================================================================
+def test_transcriber_overrides(tmp_path: Path | None = None) -> None:
+    import types as _types
+
+    import numpy as np
+
+    from whisperty.config import TranscriptionConfig
+    from whisperty.profiles import ResolvedProfile
+    from whisperty.transcriber import Transcriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+
+    class FakeModel:
+        def __init__(self):
+            self.calls: list = []
+
+        def transcribe(self, audio, language=None, beam_size=None,
+                       initial_prompt=None, hotwords=None, vad_filter=None):
+            self.calls.append({
+                "audio": audio, "language": language,
+                "initial_prompt": initial_prompt, "hotwords": hotwords,
+            })
+            seg = _types.SimpleNamespace(text="bonjour scada")
+            info = _types.SimpleNamespace(language=language)
+            return [seg], info
+
+    cfg = TranscriptionConfig(initial_prompt="PROMPT BASE", language="fr")
+    t = Transcriber(cfg, hotwords=["base"], replacements={"scada": "SCADA"})
+    t._model = FakeModel()  # court-circuite load() (pas de faster-whisper requis)
+
+    # Sans profil : défauts de l'instance + corrections du dictionnaire de base.
+    out = t.transcribe(np.ones(10, dtype=np.float32))
+    assert out == "bonjour SCADA", out
+    call = t._model.calls[-1]
+    assert call["initial_prompt"] == "PROMPT BASE"
+    assert call["hotwords"] == "base"
+
+    # Avec profil : surcharge prompt/langue/hotwords/corrections.
+    prof = ResolvedProfile(
+        name="code", initial_prompt="PROMPT CODE", language="en",
+        hotwords=["commit", "merge"], replacements={"scada": "SCADA-2"},
+    )
+    out2 = t.transcribe(np.ones(10, dtype=np.float32), prof)
+    assert out2 == "bonjour SCADA-2", out2
+    call2 = t._model.calls[-1]
+    assert call2["initial_prompt"] == "PROMPT CODE"
+    assert call2["language"] == "en"
+    assert call2["hotwords"] == "commit, merge"
+
+    # transcribe_file : passe le chemin au modèle (décodage PyAV délégué).
+    audio_file = base / "fake_audio.wav"
+    audio_file.write_bytes(b"RIFF....WAVE")  # contenu factice : FakeModel ignore l'audio
+    out3 = t.transcribe_file(audio_file)
+    assert out3 == "bonjour SCADA", out3
+    assert t._model.calls[-1]["audio"] == str(audio_file)
+
+    # Fichier absent → FileNotFoundError explicite.
+    try:
+        t.transcribe_file(base / "absent_xyz.wav")
+        raise AssertionError("FileNotFoundError attendue")
+    except FileNotFoundError:
+        pass
+    audio_file.unlink()
+    print("[9] transcripteur : overrides de profil + transcribe_file (modèle simulé)  OK")
+
+
+# =============================================================================
+# 10) Robustesse du parsing config (YAML malformé ne doit jamais crasher) (V2)
+# =============================================================================
+def test_config_robustness(tmp_path: Path | None = None) -> None:
+    import yaml
+
+    from whisperty.config import Config, _build_profiles
+    from whisperty.history import History
+    from whisperty.profiles import ProfileResolver
+
+    base = tmp_path or Path(__file__).resolve().parent
+
+    # _build_profiles tolère tout YAML mal formé sans lever.
+    assert _build_profiles(None).definitions == []
+    assert _build_profiles({}).definitions == []
+    # definitions non-liste (oubli des tirets) → vide + enabled conservé.
+    pc = _build_profiles({"enabled": True, "definitions": {"name": "x"}})
+    assert pc.enabled is True and pc.definitions == []
+    # item non-dict ignoré ; match scalaire/None/int normalisé ; corrections non-dict → {}.
+    pc = _build_profiles({
+        "enabled": True,
+        "definitions": [
+            "pas un dict",
+            {"name": "a", "match": "code.exe", "corrections": ["oops"]},
+            {"name": "b", "match": None},
+            {"name": "c", "match": 123, "hotwords": "mot"},
+        ],
+    })
+    assert [d.name for d in pc.definitions] == ["a", "b", "c"]
+    da, db, dc = pc.definitions
+    assert da.match == ["code.exe"] and da.corrections == {}
+    assert db.match == []
+    assert dc.match == ["123"] and dc.hotwords == ["mot"]
+
+    # ProfileResolver ne lève jamais sur ces définitions limites.
+    cfg = Config()
+    cfg.dictionary.enabled = False
+    cfg.profiles = pc
+    resolver = ProfileResolver(cfg)
+    assert resolver.for_app("code.exe").name == "a"
+    assert resolver.for_app("zzz.exe").name == "(défaut)"
+
+    # Coercition numérique + démarrage sans crash malgré des valeurs mal typées.
+    work = base / "tmp_robust.yaml"
+    work.write_text(
+        yaml.safe_dump({
+            "history": {"max_entries": "pas_un_nombre"},  # invalide → défaut
+            "audio": {"samplerate": "16000"},             # str coercible → int
+            "transcription": {"beam_size": "abc"},        # invalide → défaut 5
+            "ai": {"timeout": "12"},                       # str → float
+        }),
+        encoding="utf-8",
+    )
+    loaded = Config.load(work)
+    assert loaded.audio.samplerate == 16000 and isinstance(loaded.audio.samplerate, int)
+    assert loaded.transcription.beam_size == 5            # repli sur le défaut
+    assert loaded.ai.timeout == 12.0
+    assert loaded.history.max_entries == 200              # repli (coercition _build)
+    History.from_config(loaded).close()                   # ne crashe pas au démarrage
+    work.unlink()
+
+    # Garde directe de History (constructeur appelé hors config).
+    h = History(base / "never.db", max_entries="abc")
+    assert h.max_entries == 200
+    h.close()
+    assert not (base / "never.db").exists()
+    print("[10] robustesse config : profils/numeriques malformes -> defauts surs, zero crash  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -307,6 +595,11 @@ def _run_all() -> None:
     test_injector_type()
     test_key_variants_and_imports()
     test_state_machine()
+    test_history(tmp)
+    test_profiles()
+    test_ai_local_guard()
+    test_transcriber_overrides(tmp)
+    test_config_robustness(tmp)
     print("\nTOUS LES TESTS PASSENT")
 
 

@@ -78,3 +78,19 @@ class TextInjector:
             controller.type(char)
             if self.cfg.type_delay:
                 time.sleep(self.cfg.type_delay)
+
+    def copy_to_clipboard(self, text: str) -> bool:
+        """Copie ``text`` dans le presse-papiers sans le coller (import audio, historique).
+
+        Renvoie ``True`` si la copie a réussi.
+        """
+        if not text:
+            return False
+        try:
+            import pyperclip
+
+            pyperclip.copy(text)
+            return True
+        except Exception:  # noqa: BLE001 — presse-papiers / dépendance indisponible
+            logger.exception("Copie dans le presse-papiers échouée")
+            return False

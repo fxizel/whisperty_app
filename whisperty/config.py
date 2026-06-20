@@ -7,7 +7,7 @@ incomplet, l'application démarre quand même avec les défauts. Les chemins rel
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 from typing import Optional, Union
 
@@ -68,6 +68,55 @@ class LoggingConfig:
 
 
 @dataclass
+class HistoryConfig:
+    """Historique local des transcriptions (V2, SQLite)."""
+
+    enabled: bool = True
+    path: str = "whisperty.db"
+    max_entries: int = 200
+
+
+@dataclass
+class AIConfig:
+    """Raffinage optionnel par un LLM **local** (V2). Désactivé par défaut.
+
+    ``endpoint`` doit pointer vers un serveur local compatible OpenAI
+    (Ollama, LM Studio, llama.cpp). Tout hôte non-local est refusé (confidentialité).
+    """
+
+    enabled: bool = False
+    endpoint: str = "http://localhost:11434/v1/chat/completions"
+    model: str = "llama3.2"
+    prompt: str = (
+        "Tu corriges la ponctuation, la casse et les fautes évidentes d'un texte "
+        "dicté en français. Ne reformule pas, n'ajoute rien, ne réponds que par le "
+        "texte corrigé."
+    )
+    timeout: float = 30.0
+
+
+@dataclass
+class ProfileDef:
+    """Un profil de contexte associé à une ou plusieurs applications."""
+
+    name: str = "profil"
+    match: list[str] = field(default_factory=list)        # sous-chaînes du nom de process
+    initial_prompt: Optional[str] = None
+    language: Optional[str] = None
+    dictionary: Optional[str] = None                       # chemin d'un dictionnaire propre
+    hotwords: list[str] = field(default_factory=list)      # termes favorisés inline
+    corrections: dict[str, str] = field(default_factory=dict)  # corrections inline
+
+
+@dataclass
+class ProfilesConfig:
+    """Profils de contexte par application active (V2). Désactivés par défaut."""
+
+    enabled: bool = False
+    definitions: list[ProfileDef] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -75,6 +124,9 @@ class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     dictionary: DictionaryConfig = field(default_factory=DictionaryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
+    ai: AIConfig = field(default_factory=AIConfig)
+    profiles: ProfilesConfig = field(default_factory=ProfilesConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -98,6 +150,9 @@ class Config:
             output=_build(OutputConfig, data.get("output")),
             dictionary=_build(DictionaryConfig, data.get("dictionary")),
             logging=_build(LoggingConfig, data.get("logging")),
+            history=_build(HistoryConfig, data.get("history")),
+            ai=_build(AIConfig, data.get("ai")),
+            profiles=_build_profiles(data.get("profiles")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
         return cfg
@@ -109,13 +164,89 @@ class Config:
 
 
 def _build(dc_type, raw):
-    """Construit une dataclass à partir d'un dict YAML, en ignorant les clés inconnues."""
+    """Construit une dataclass à partir d'un dict YAML, en ignorant les clés inconnues.
+
+    Robustesse (doctrine du module) : une valeur présente mais mal typée ne doit pas
+    faire planter l'application. Les champs numériques (défaut int/float) sont coercés
+    au mieux ; en cas d'échec, on retombe sur le défaut avec un avertissement.
+    """
     if not isinstance(raw, dict) or not raw:
         return dc_type()
-    known = {f.name for f in fields(dc_type)}
-    unknown = set(raw) - known
+    known = {f.name: f for f in fields(dc_type)}
+    unknown = set(raw) - set(known)
     if unknown:
         logger.warning(
             "Clés ignorées dans %s : %s", dc_type.__name__, ", ".join(sorted(unknown))
         )
-    return dc_type(**{k: v for k, v in raw.items() if k in known})
+    kwargs = {
+        name: _coerce(dc_type, known[name], value)
+        for name, value in raw.items()
+        if name in known
+    }
+    return dc_type(**kwargs)
+
+
+def _coerce(dc_type, field_obj, value):
+    """Coerce ``value`` vers le type numérique du champ (best-effort, repli sur le défaut)."""
+    default = field_obj.default
+    if default is MISSING or isinstance(default, bool):
+        # Pas de défaut scalaire (ex. champ à default_factory) ou booléen : on ne touche pas.
+        return value
+    target = None
+    if isinstance(default, int):
+        target = int
+    elif isinstance(default, float):
+        target = float
+    if target is None or isinstance(value, target):
+        return value
+    try:
+        return target(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "%s.%s : valeur %r invalide ; défaut %r utilisé.",
+            dc_type.__name__, field_obj.name, value, default,
+        )
+        return default
+
+
+def _as_str_list(value) -> list[str]:
+    """Normalise une valeur YAML en liste de chaînes non vides (robuste aux None/scalaires)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if v is not None and str(v).strip()]
+    return [str(value)]  # scalaire isolé (ex. int) → ["123"]
+
+
+def _build_profiles(raw) -> ProfilesConfig:
+    """Construit ``ProfilesConfig`` (section avec une liste de profils imbriquée).
+
+    Tolère les YAML mal formés : ``definitions`` non-liste, entrées non-dict, ``match``/
+    ``hotwords`` scalaires ou nuls, ``corrections`` non-mapping — sans jamais lever.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return ProfilesConfig()
+    defs_raw = raw.get("definitions")
+    if defs_raw and not isinstance(defs_raw, list):
+        logger.warning(
+            "profiles.definitions doit être une liste ; section profils ignorée."
+        )
+        defs_raw = []
+    definitions: list[ProfileDef] = []
+    for item in defs_raw or []:
+        if not isinstance(item, dict):
+            logger.warning("Profil ignoré (entrée non-dictionnaire) : %r", item)
+            continue
+        definition = _build(ProfileDef, item)
+        definition.match = _as_str_list(definition.match)
+        definition.hotwords = _as_str_list(definition.hotwords)
+        if not isinstance(definition.corrections, dict):
+            logger.warning(
+                "Profil « %s » : 'corrections' doit être un mapping ; ignoré.",
+                definition.name,
+            )
+            definition.corrections = {}
+        definitions.append(definition)
+    return ProfilesConfig(enabled=bool(raw.get("enabled", False)), definitions=definitions)

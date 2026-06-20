@@ -42,9 +42,13 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne) | fait |
 | `injector.py` | Injection texte (collage Ctrl+V par défaut, frappe en repli) | fait |
 | `tray.py` | Icône zone de notification (pystray) | fait |
-| `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD | fait |
+| `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |
 | `dictionary.py` | Chargement dictionnaire + corrections | fait |
+| `history.py` | Historique des transcriptions (SQLite local, thread-safe) | fait (V2) |
+| `ai.py` | Raffinage texte par LLM **local** (garde localhost, désactivé par défaut) | fait (V2) |
+| `profiles.py` | Profils de contexte par application (override prompt/langue/dico) | fait (V2) |
+| `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
 
 ## Concurrence (à préserver)
 
@@ -63,6 +67,13 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   pour AMD/Intel ; sur ces GPU, rester en CPU int8 (ou envisager whisper.cpp/Vulkan).
 - **Confidentialité** : `local_files_only` est **true par défaut** (zéro réseau) ; en mode
   hors-ligne, `transcriber.load()` pose aussi `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`.
+- **IA locale (V2)** : `ai.py` n'autorise QUE des endpoints locaux (`ai.is_local_endpoint` :
+  localhost/127.0.0.1/::1) et est **désactivé par défaut**. Tout endpoint distant est refusé —
+  le texte dicté ne doit jamais sortir de la machine. Échec LLM = texte brut conservé (jamais bloquant).
+- **Historique (V2)** : `history.py` = SQLite local (`sqlite3` stdlib), connexion partagée
+  `check_same_thread=False` mais **tous les accès passent par `History._lock`** ; écriture non bloquante.
+- **Profils (V2)** : surcharge `initial_prompt`/langue/dictionnaire selon l'app active, capturée
+  par `winutil.foreground_app()` au **démarrage** de la dictée (= cible de l'injection).
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.

@@ -19,11 +19,15 @@ import sys
 import threading
 import time
 
+from .ai import LocalLLM
 from .config import Config
+from .history import History
 from .injector import TextInjector
+from .profiles import ProfileResolver
 from .recorder import AudioRecorder, MicrophoneError
 from .transcriber import ModelNotAvailableError, Transcriber
 from .tray import Tray, TrayState
+from .winutil import foreground_app
 
 logger = logging.getLogger("whisperty")
 
@@ -59,16 +63,25 @@ class WhispertyApp:
         )
         self.transcriber = Transcriber.from_config(config)
         self.injector = TextInjector(config.output)
+        # V2 : historique local, raffinage LLM local, profils de contexte.
+        self.history = History.from_config(config)
+        self.llm = LocalLLM(config.ai)
+        self.profiles = ProfileResolver(config)
         self.tray = Tray(
             on_toggle=self.toggle,
             on_quit=self.quit,
             on_open_config=self.open_config,
+            on_import_audio=self.import_audio,
+            on_copy_last=self.copy_last if config.history.enabled else None,
+            on_open_history=self.open_history if config.history.enabled else None,
         )
         # État protégé par un verrou réentrant (transitions multi-threads).
         self._state = TrayState.IDLE
         self._lock = threading.RLock()
         self._quitting = False
         self._listener = None
+        # Application active capturée au démarrage de la dictée (profils de contexte).
+        self._active_app: str | None = None
 
     # -- gestion d'état (toujours sous verrou) ---------------------------------
     def _set_state(self, state: TrayState) -> None:
@@ -102,10 +115,24 @@ class WhispertyApp:
             except MicrophoneError as exc:
                 logger.error("%s", exc)
                 return
+            # Capture l'application au premier plan (= cible de l'injection) pour
+            # choisir le profil de contexte. Lecture locale rapide ; None si désactivé.
+            self._active_app = foreground_app() if self.config.profiles.enabled else None
             self._set_state(TrayState.RECORDING)
             logger.info("Dictée : enregistrement…")
             # Surveillance : arrêt auto sur silence (toggle) + garde-fou durée max.
-            threading.Thread(target=self._monitor_recording, daemon=True).start()
+            try:
+                threading.Thread(target=self._monitor_recording, daemon=True).start()
+            except RuntimeError:
+                # Threads OS épuisés : sans surveillance, on perd l'arrêt auto et le
+                # garde-fou de durée. On annule proprement plutôt que de laisser un
+                # flux micro orphelin en RECORDING (stop() prend _op_lock : ordre _lock→_op_lock respecté).
+                logger.exception("Démarrage de la surveillance impossible ; enregistrement annulé.")
+                try:
+                    self.recorder.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._set_state(TrayState.IDLE)
 
     def _stop_and_process(self) -> None:
         # Transition d'état sous verrou ; passer à PROCESSING rend tout autre
@@ -125,7 +152,24 @@ class WhispertyApp:
                     self._set_state(TrayState.IDLE)
             return
         # Transcription hors du thread d'écoute clavier.
-        threading.Thread(target=self._process, args=(audio,), daemon=True).start()
+        self._spawn_worker(self._process, audio)
+
+    def _spawn_worker(self, target, *args) -> bool:
+        """Démarre un thread worker daemon ; restaure IDLE si le démarrage échoue.
+
+        ``Thread.start()`` peut lever ``RuntimeError`` (threads OS épuisés). Sans
+        filet, l'état resterait figé en PROCESSING (plus aucun worker pour le finally
+        qui repasse IDLE), rendant l'app inopérante. Ici on rétablit l'état.
+        """
+        try:
+            threading.Thread(target=target, args=args, daemon=True).start()
+            return True
+        except RuntimeError:
+            logger.exception("Démarrage d'un thread worker impossible")
+            with self._lock:
+                if self._state is TrayState.PROCESSING:
+                    self._set_state(TrayState.IDLE)
+            return False
 
     def _monitor_recording(self) -> None:
         """Coupe l'enregistrement sur silence prolongé (toggle) ou à la durée max."""
@@ -159,11 +203,18 @@ class WhispertyApp:
                     return
 
     def _process(self, audio) -> None:
+        app_name = self._active_app
         try:
-            text = self.transcriber.transcribe(audio)
+            profile = self.profiles.for_app(app_name)
+            text = self.transcriber.transcribe(audio, profile)
+            text = self.llm.refine(text)  # raffinage LLM local (no-op si désactivé)
             if text:
                 logger.info("Texte : %s", text)
                 self.injector.inject(text)
+                self.history.add(
+                    text, source="dictée", app=app_name,
+                    model=self.config.transcription.model,
+                )
             else:
                 logger.info("Transcription vide (aucune parole détectée).")
         except ModelNotAvailableError as exc:
@@ -176,6 +227,96 @@ class WhispertyApp:
                 # (un nouvel enregistrement a pu démarrer entre-temps).
                 if self._state is TrayState.PROCESSING:
                     self._set_state(TrayState.IDLE)
+
+    # -- import de fichier audio (V2) ------------------------------------------
+    def import_audio(self) -> None:
+        """Transcrit un fichier audio choisi par l'utilisateur (menu tray).
+
+        Réutilise la machine à états (IDLE → PROCESSING → IDLE). Le résultat est
+        copié dans le presse-papiers et archivé (plutôt qu'injecté : l'app cible
+        est ambiguë depuis le menu tray).
+        """
+        path = self._ask_audio_file()
+        if not path:
+            return
+        with self._lock:
+            if self._state is not TrayState.IDLE:
+                logger.info("Import ignoré : une dictée/transcription est en cours.")
+                return
+            self._set_state(TrayState.PROCESSING)
+        self._spawn_worker(self._process_file, path)
+
+    def _process_file(self, path: str) -> None:
+        name = os.path.basename(path)
+        try:
+            text = self.transcriber.transcribe_file(path)
+            text = self.llm.refine(text)
+            if text:
+                logger.info("Fichier « %s » transcrit : %d caractères.", name, len(text))
+                copied = self.injector.copy_to_clipboard(text)
+                self.history.add(
+                    text, source="fichier", app=name,
+                    model=self.config.transcription.model,
+                )
+                if copied:
+                    self.tray.notify(f"« {name} » transcrit et copié dans le presse-papiers.")
+                else:
+                    self.tray.notify(f"« {name} » transcrit (copie presse-papiers indisponible).")
+            else:
+                self.tray.notify(f"« {name} » : aucune parole détectée.")
+        except FileNotFoundError as exc:
+            logger.error("%s", exc)
+        except ModelNotAvailableError as exc:
+            logger.error("%s", exc)
+        except Exception:  # noqa: BLE001
+            logger.exception("Échec de l'import audio")
+        finally:
+            with self._lock:
+                if self._state is TrayState.PROCESSING:
+                    self._set_state(TrayState.IDLE)
+
+    def _ask_audio_file(self) -> str | None:
+        """Ouvre un sélecteur de fichier (tkinter, standard). None si annulé/indispo."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError:
+            logger.error("tkinter indisponible : import audio impossible.")
+            return None
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            path = filedialog.askopenfilename(
+                title="Importer un fichier audio",
+                filetypes=[
+                    ("Fichiers audio", "*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.wma *.aac"),
+                    ("Tous les fichiers", "*.*"),
+                ],
+            )
+            root.destroy()
+            return path or None
+        except Exception:  # noqa: BLE001
+            logger.exception("Sélecteur de fichier indisponible")
+            return None
+
+    # -- historique (V2) -------------------------------------------------------
+    def copy_last(self) -> None:
+        """Copie la dernière transcription dans le presse-papiers (menu tray)."""
+        text = self.history.last_text()
+        if not text:
+            self.tray.notify("Historique vide.")
+            return
+        if self.injector.copy_to_clipboard(text):
+            self.tray.notify("Dernière transcription copiée.")
+
+    def open_history(self) -> None:
+        """Ouvre le dossier contenant la base d'historique."""
+        folder = self.config.resolve(self.config.history.path).parent
+        try:
+            os.startfile(str(folder))  # type: ignore[attr-defined]  # Windows
+        except Exception:  # noqa: BLE001
+            logger.info("Dossier de l'historique : %s", folder)
 
     # -- actions menu ----------------------------------------------------------
     def open_config(self) -> None:
@@ -200,6 +341,10 @@ class WhispertyApp:
                 self._listener.stop()
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            self.history.close()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.tray.stop()
         except Exception:  # noqa: BLE001

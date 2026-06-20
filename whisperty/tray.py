@@ -48,26 +48,55 @@ class Tray:
         on_toggle: Callable[[], None],
         on_quit: Callable[[], None],
         on_open_config: Optional[Callable[[], None]] = None,
+        on_import_audio: Optional[Callable[[], None]] = None,
+        on_copy_last: Optional[Callable[[], None]] = None,
+        on_open_history: Optional[Callable[[], None]] = None,
     ) -> None:
         from pystray import Icon, Menu, MenuItem
 
         self._state = TrayState.IDLE
         self._images = {state: _make_image(color) for state, color in _COLORS.items()}
 
-        # Les callbacks pystray reçoivent (icon, item) ; on les ignore.
+        def _action(callback: Optional[Callable[[], None]]):
+            # Les callbacks pystray reçoivent (icon, item) ; on les ignore.
+            return lambda icon, item: callback() if callback else None
+
         menu = Menu(
-            MenuItem("Démarrer / Arrêter la dictée", lambda icon, item: on_toggle()),
+            MenuItem("Démarrer / Arrêter la dictée", _action(on_toggle)),
             MenuItem(
-                "Ouvrir la configuration",
-                lambda icon, item: on_open_config() if on_open_config else None,
-                enabled=on_open_config is not None,
+                "Importer un fichier audio…",
+                _action(on_import_audio),
+                enabled=on_import_audio is not None,
+            ),
+            MenuItem(
+                "Copier la dernière transcription",
+                _action(on_copy_last),
+                enabled=on_copy_last is not None,
             ),
             Menu.SEPARATOR,
-            MenuItem("Quitter", lambda icon, item: on_quit()),
+            MenuItem(
+                "Ouvrir la configuration",
+                _action(on_open_config),
+                enabled=on_open_config is not None,
+            ),
+            MenuItem(
+                "Ouvrir le dossier de l'historique",
+                _action(on_open_history),
+                enabled=on_open_history is not None,
+            ),
+            Menu.SEPARATOR,
+            MenuItem("Quitter", _action(on_quit)),
         )
         self._icon = Icon(
             "whisperty", self._images[TrayState.IDLE], _TITLES[TrayState.IDLE], menu
         )
+
+    def notify(self, message: str, title: str = "Whisperty") -> None:
+        """Affiche une notification système (best-effort selon le backend pystray)."""
+        try:
+            self._icon.notify(message, title)
+        except Exception:  # noqa: BLE001 — toutes les plateformes ne supportent pas notify()
+            logger.debug("Notification tray indisponible : %s", message)
 
     @property
     def state(self) -> TrayState:

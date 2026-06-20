@@ -21,6 +21,13 @@ navigateur…) **sans qu'aucune donnée ne quitte la machine**.
 - 🔔 **Icône system tray** avec statut (gris = prêt, rouge = enregistrement, orange = transcription).
 - ⚙️ Configuration **YAML** unique (`config.yaml`).
 
+### Nouveautés V2
+
+- 📜 **Historique local** des dictées (SQLite) — purge automatique, « Copier la dernière transcription » depuis le tray.
+- 📂 **Import de fichiers audio** (WAV/MP3/M4A/FLAC…) via le menu tray ; le texte est copié dans le presse-papiers et archivé (décodage PyAV embarqué, sans ffmpeg).
+- 🤖 **Mode IA local optionnel** — reponctuation/correction via un LLM **sur la machine** (Ollama, LM Studio…). Désactivé par défaut ; **seuls les endpoints locaux sont acceptés** (la confidentialité interdit tout envoi distant).
+- 🎯 **Profils de contexte** — l'`initial_prompt`, la langue et le dictionnaire s'adaptent à l'application active (profil « code » dans VS Code, « mail » dans Outlook…).
+
 ## Prérequis système (Windows)
 
 - **Python 3.10+** (64 bits) — **testé avec 3.14.3** : toutes les roues binaires, dont
@@ -80,16 +87,35 @@ python -m whisperty.recorder
 | `output` | `method` (paste/type), `restore_clipboard` |
 | `dictionary` | `enabled`, `path` (→ `dictionary.txt`) |
 | `logging` | `level`, `path` |
+| `history` | `enabled`, `path` (→ `whisperty.db`), `max_entries` |
+| `ai` | `enabled`, `endpoint` (local uniquement), `model`, `prompt`, `timeout` |
+| `profiles` | `enabled`, `definitions` (`name`, `match`, `initial_prompt`, `language`, `hotwords`, `corrections`, `dictionary`) |
 
 ## Dictionnaire (`dictionary.txt`)
 
 - `terme` → mot favorisé par la reconnaissance (hotwords) ;
 - `mauvais => correct` → correction appliquée après transcription.
 
+## Fonctions V2
+
+- **Historique** : chaque dictée est archivée dans `whisperty.db` (SQLite, à côté de
+  `config.yaml`). Le menu tray propose « Copier la dernière transcription » et « Ouvrir le
+  dossier de l'historique ». Désactivable (`history.enabled: false`).
+- **Import audio** : menu tray → « Importer un fichier audio… ». Le fichier est transcrit
+  localement, le texte est **copié dans le presse-papiers** (et archivé) — collez-le où vous voulez.
+- **Mode IA local** (`ai.enabled: true`) : post-traitement par un LLM tournant sur la machine.
+  Démarrez par exemple [Ollama](https://ollama.com) (`ollama run llama3.2`) puis pointez
+  `ai.endpoint` vers `http://localhost:11434/v1/chat/completions`. **Tout endpoint non-local est
+  refusé** : le texte dicté ne quitte jamais la machine. En cas d'échec, le texte brut est conservé.
+- **Profils de contexte** (`profiles.enabled: true`) : selon l'application au premier plan au
+  démarrage de la dictée, un profil surcharge l'`initial_prompt`, la langue et le dictionnaire
+  (cf. `profiles.definitions` dans `config.yaml`).
+
 ## Tests
 
 ```powershell
-python tests/test_logic.py        # logique pure (config, dictionnaire, injection) — sans micro
+python tests/test_logic.py        # logique pure (config, dictionnaire, injection, historique,
+                                  # profils, garde IA locale, overrides) — sans micro ni modèle
 ```
 
 ## Packaging (Étape 5)
@@ -132,4 +158,4 @@ par `app.py`.
 - [x] **Étape 3** — Injection de texte (`whisperty/injector.py`)
 - [x] **Étape 4** — Raccourci global + system tray (`whisperty/app.py`, `tray.py`, `config.py`)
 - [x] **Étape 5** — Packaging (`whisperty.spec`, `scripts/`)
-- [ ] **V2** — Import de fichiers audio, modes IA (LLM local), historique SQLite, profils de contexte
+- [x] **V2** — Import de fichiers audio, mode IA (LLM local), historique SQLite, profils de contexte
