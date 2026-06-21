@@ -291,14 +291,16 @@ journalisé), jamais mis en file.
 1. Tray → « Transcription live (sortie audio) » → choix de la sortie (défaut ou périphérique listé).
 2. État `LIVE` (icône **bleue**) ; capture **loopback** (WASAPI / `soundcard`).
 3. Un segmenteur VAD découpe le flux ; chaque segment est transcrit (réglages de base, **sans** profil ni LLM — priorité latence) et écrit au fil de l'eau dans `transcriptions/live_<horodatage>.txt`.
-4. À l'arrêt (menu), le texte complet est **copié** dans le presse-papiers et archivé (source = `live`) ; retour `IDLE`.
+4. (Si l'**interface fenêtre** est ouverte) chaque segment s'ajoute **au fil de l'eau** à la tuile « Dernière transcription » du tableau de bord, qui devient un flux en direct (US-09) — sans attendre l'arrêt.
+5. À l'arrêt (menu), le texte complet est **copié** dans le presse-papiers et archivé (source = `live`) ; retour `IDLE`.
 
 **Exceptions**
 - *`soundcard` absent / loopback indisponible* : démarrage échoue, notification, retour `IDLE`.
 - *Aucun texte transcrit* : notification, pas d'archivage.
+- *Fenêtre fermée / mode tray seul* : la capture, le fichier et l'archivage sont **inchangés** (l'affichage en direct est un confort, non bloquant).
 
 **Préconditions** : `soundcard` installé.
-**Exigences liées** : FR-12, RE-08, PE-03, CO-05, CO-06 (COM par thread).
+**Exigences liées** : FR-12, US-09, RE-08, PE-03, CO-05, CO-06 (COM par thread).
 
 ---
 
@@ -313,9 +315,10 @@ journalisé), jamais mis en file.
 1. Tray → « Transcription de réunion (micro + sortie) » → choix de la sortie.
 2. Notification de **rappel de consentement** ; état `CONFERENCE` (icône **verte**).
 3. Le micro et la sortie sont capturés **simultanément**, chacun segmenté et transcrit séparément, horodaté par position audio.
-4. À l'arrêt, les segments des deux sources sont **entrelacés chronologiquement** et exportés (`.txt`/`.md` horodaté) :
+4. (Si l'**interface fenêtre** est ouverte) chaque segment transcrit s'affiche **au fil de l'eau** dans la tuile « Dernière transcription » du tableau de bord (flux en direct, ligne `[MM:SS] Moi/Interlocuteurs : …`) — US-09.
+5. À l'arrêt, les segments des deux sources sont **entrelacés chronologiquement** et exportés (`.txt`/`.md` horodaté) :
    `[MM:SS] Moi : …` / `[MM:SS] Interlocuteurs : …`.
-5. Le transcript est archivé (source = `réunion`) ; **non injecté** ; retour `IDLE`.
+6. Le transcript est archivé (source = `réunion`) ; **non injecté** ; retour `IDLE`.
 
 **Variante (itération 1 — `distinguish_speakers: false`)** : les deux sources sont **mixées**
 en une transcription continue sans étiquette de locuteur.
@@ -323,9 +326,10 @@ en une transcription continue sans étiquette de locuteur.
 **Exceptions / robustesse**
 - *Une source manque ou meurt en cours* : l'autre source est utilisée seule (la source morte est retirée pour ne pas geler l'alignement).
 - *Aucune source* : démarrage échoue, notification.
+- *Fenêtre fermée / mode tray seul* : capture, export et archivage **inchangés** (l'affichage en direct est un confort, non bloquant).
 
 **Préconditions** : `conference.enabled: true` ; `soundcard` ; **consentement** des participants (BR-05).
-**Exigences liées** : FR-13, RE-08, RE-09, CO-04, CO-05, BR-05.
+**Exigences liées** : FR-13, US-09, RE-08, RE-09, CO-04, CO-05, BR-05.
 
 ---
 

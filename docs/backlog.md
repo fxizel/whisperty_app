@@ -171,7 +171,7 @@ consentement.
 
 **Critères d'acceptance de haut niveau**
 - L'utilisateur peut transcrire un fichier audio existant et retrouver ses transcriptions passées.
-- L'utilisateur peut suivre et restituer une réunion en ligne (en direct ou en compte rendu), localement.
+- L'utilisateur peut suivre et restituer une réunion en ligne (en direct ou en compte rendu), localement, et — si la fenêtre est ouverte — en voir la transcription progresser au fur et à mesure.
 - Les modes de captation de conversation rappellent le consentement et n'insèrent jamais de texte à l'insu de l'utilisateur.
 
 ### ST-3.1 — Importer et transcrire un fichier audio
@@ -198,6 +198,7 @@ récupérer un texte produit précédemment.
 j'entends, **afin de** suivre la réunion par écrit sans prendre de notes.
 - Je peux lancer une transcription en direct de ce qui sort de mon ordinateur (le son de la réunion).
 - Le texte s'écrit au fil de la conversation dans un fichier daté.
+- Si la fenêtre de l'application est ouverte, je vois la transcription **s'afficher au fur et à mesure** (flux en direct), sans attendre l'arrêt ; la fenêtre étant facultative, sa fermeture n'interrompt ni la transcription ni l'enregistrement du fichier.
 - À l'arrêt, le texte complet est copié et ajouté à mon historique.
 - Ce mode n'insère rien automatiquement dans une autre application.
 - L'icône indique clairement que la transcription en direct est active.
@@ -209,6 +210,7 @@ captant à la fois ma voix et celle de mes interlocuteurs, **afin d'**obtenir un
 écrit sans prendre de notes.
 - L'application capte simultanément ma voix (micro) et le son des interlocuteurs (sortie de l'ordinateur).
 - Le compte rendu est exporté dans un fichier daté (texte ou format enrichi) et ajouté à l'historique ; il n'est pas inséré automatiquement.
+- Si la fenêtre de l'application est ouverte, je vois le compte rendu **se construire au fur et à mesure** (flux en direct, avec l'indication du locuteur), sans attendre la fin de la réunion.
 - Au démarrage, l'application rappelle la nécessité du consentement des participants (cf. ST-5.4).
 - Si une seule source est disponible (micro **ou** son de l'ordinateur), la transcription se poursuit avec celle-ci.
 - **Priorité : Could** · **Parent : EPIC-3**

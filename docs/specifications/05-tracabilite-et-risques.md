@@ -41,8 +41,8 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-06 IA locale | FR-09, FR-22 | RE-06, CO-01, CO-03, BR-03 |
 | UC-07 Import fichier | FR-10, FR-20 | RE-02, US-02, US-07, CO-07, BR-06 |
 | UC-08 Historique | FR-11 | RE-07, RE-10, US-02, SU-03, SU-08 |
-| UC-09 Live | FR-12, FR-16, FR-19, FR-20 | RE-08, RE-10, PE-03, PE-04, US-02, US-07, CO-05, CO-06, BR-06 |
-| UC-10 Réunion | FR-13, FR-16, FR-19, FR-20 | RE-08, RE-09, RE-10, PE-03, US-02, US-07, CO-04, CO-05, CO-06, CO-16, BR-05, BR-06 |
+| UC-09 Live | FR-12, FR-16, FR-19, FR-20 | RE-08, RE-10, PE-03, PE-04, US-02, US-07, US-09, CO-05, CO-06, BR-06 |
+| UC-10 Réunion | FR-13, FR-16, FR-19, FR-20 | RE-08, RE-09, RE-10, PE-03, US-02, US-07, US-09, CO-04, CO-05, CO-06, CO-16, BR-05, BR-06 |
 | UC-11 Assistant | FR-14, FR-16, FR-19, FR-20, FR-22 | RE-06, RE-08, RE-10, US-02, US-07, CO-03, CO-06, CO-16, BR-05, BR-07 |
 | UC-12 Configurer | FR-17, FR-21 | US-02, US-05, SU-01, SU-08 |
 | UC-13 Packaging | FR-17 | SU-04, CO-08, CO-11 |
@@ -85,6 +85,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | US-06 | UC-02, UC-03 |
 | US-07 | UC-07, UC-09, UC-10, UC-11 |
 | US-08 | UC-02 |
+| US-09 | UC-09, UC-10 |
 | RE-01 | UC-01 |
 | RE-02 | UC-01, UC-07 |
 | RE-03 | UC-03 |
@@ -172,7 +173,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | Catégorie | Nb exigences | Couverture personas |
 |-----------|:------------:|---------------------|
 | Functionality (FR) | 22 | P-01 → P-06 |
-| Usability (US) | 8 | P-01, P-04 (priorité), tous |
+| Usability (US) | 9 | P-01, P-04 (priorité), tous |
 | Reliability (RE) | 10 | P-04, P-02 (priorité), tous |
 | Performance (PE) | 5 | P-01, P-05, P-06 |
 | Supportability (SU) | 8 | P-06 (priorité), mainteneurs |
