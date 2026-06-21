@@ -229,9 +229,23 @@ input::placeholder { color: var(--faint); }
 
 select {
   appearance: none; -webkit-appearance: none;
+  /* color-scheme: dark → le menu déroulant NATIF (WebView2/Chromium) est rendu en
+     sombre. Sans cela, il hérite du thème système (souvent clair) et affiche du
+     texte clair sur fond clair = illisible. */
+  color-scheme: dark;
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.09);
   color: var(--text); border-radius: 8px; padding: 9px 30px 9px 12px;
   font: inherit; font-size: 13px; cursor: pointer; width: 100%;
+}
+/* Options du menu : fond OPAQUE sombre + texte clair (le fond du select est
+   translucide ; un menu translucide se compositerait en clair → mauvais contraste). */
+select option {
+  background: #14141c;
+  color: var(--text);
+}
+select option:checked {
+  background: #2a2140;
+  color: #fff;
 }
 .select-wrap { position: relative; }
 .select-wrap .chev {

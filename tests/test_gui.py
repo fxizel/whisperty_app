@@ -203,6 +203,56 @@ def test_gui_api_shapes(tmp_path: Path) -> None:
     print("[gui 6] GuiApi : get_config/get_dashboard/get_history/poll/_fmt_time  OK")
 
 
+def test_gui_api_audio_source(tmp_path: Path) -> None:
+    """Sélecteur de source loopback : énumération + mémorisation + passage au démarrage."""
+    from whisperty.gui import GuiApi
+    from whisperty.tray import TrayState
+
+    app, _ = _make_app(tmp_path)
+    api = GuiApi(app)
+
+    # Énumération : au minimum « Sortie par défaut » (value None), best-effort.
+    outs = api.list_audio_outputs()
+    assert outs and outs[0]["value"] is None
+    assert outs[0]["label"] == "Sortie par défaut"
+
+    # set_source : None/"" => défaut ; entier/chaîne numérique => index ; invalide => défaut.
+    assert api._source is None
+    api.set_source(2)
+    assert api._source == 2
+    api.set_source("3")
+    assert api._source == 3
+    api.set_source("")
+    assert api._source is None
+    api.set_source(1)
+    api.set_source(None)
+    assert api._source is None
+    api.set_source("pas-un-index")
+    assert api._source is None
+
+    # toggle_record transmet la source choisie à start_live / start_conference.
+    started: dict = {}
+    app.start_live = lambda spec=None: started.__setitem__("live", spec)
+    app.start_conference = lambda spec=None: started.__setitem__("conf", spec)
+    app._state = TrayState.IDLE
+
+    api.set_source(2)
+    api._mode = "live"
+    api.toggle_record()
+    assert started.get("live") == 2
+
+    api._mode = "conference"
+    api.toggle_record()
+    assert started.get("conf") == 2
+
+    # Source « défaut » → None transmis (start_* retombe sur la config).
+    api.set_source("")
+    api._mode = "live"
+    api.toggle_record()
+    assert started.get("live") is None
+    print("[gui 9] GuiApi : source audio (list/set_source + passage à start_live/conf)  OK")
+
+
 def test_apply_config_from_gui(tmp_path: Path) -> None:
     app, cfg = _make_app(tmp_path)
     inj0, llm0 = id(app.injector), id(app.llm)
@@ -263,6 +313,7 @@ def _run_all() -> None:
         test_configio_no_cross_section_leak,
         test_history_delete,
         test_gui_api_shapes,
+        test_gui_api_audio_source,
         test_apply_config_from_gui,
         test_apply_config_invalid_nonblocking,
     ]):

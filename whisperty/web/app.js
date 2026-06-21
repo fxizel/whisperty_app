@@ -291,7 +291,16 @@ async function loadSources() {
   sel.innerHTML = opts.map(o =>
     `<option value="${o.value === null ? "" : o.value}">${escapeHtml(o.label)}</option>`
   ).join("");
-  sel.value = ui.source == null ? "" : String(ui.source);
+  const wanted = ui.source == null ? "" : String(ui.source);
+  sel.value = wanted;
+  // La source mémorisée a pu disparaître (périphérique débranché entre deux chargements) :
+  // si l'affectation n'a pas « pris », on retombe sur la sortie par défaut et on
+  // resynchronise le backend pour éviter de démarrer sur un index invalide.
+  if (sel.value !== wanted) {
+    ui.source = null;
+    sel.value = "";
+    call("set_source", null);
+  }
   updateSourceVisibility();
 }
 
