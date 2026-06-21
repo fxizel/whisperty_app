@@ -29,6 +29,12 @@ soundcard>=0.4.2        # capture loopback de la sortie audio (Windows Core Audi
                         # ctypes ; PortAudio/sounddevice n'expose pas le loopback).
                         # 100 % local, aucun appel réseau.
 
+# --- V2 : interface fenêtre (dashboard / configuration / historique) ------------
+pywebview>=5.0          # fenêtre native rendant l'UI HTML via Edge WebView2 (préinstallé
+                        # sur Win10/11). 100 % local : aucun asset distant, police système
+                        # (pas de Google Fonts). Tire pythonnet/clr-loader (binding .NET).
+                        # Optionnel : si absent, l'app démarre en mode tray seul (--no-gui).
+
 # --- V2 (optionnel : décommenter au besoin) ------------------------------------
 # requests>=2.31        # non requis : le client LLM local utilise urllib (stdlib)
 

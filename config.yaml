@@ -52,6 +52,14 @@ logging:
 
 # --- V2 -----------------------------------------------------------------------
 
+gui:
+  # Interface fenêtre (tableau de bord, configuration, historique) rendue via Edge
+  # WebView2 (préinstallé sur Windows 10/11). 100 % local : aucun asset distant.
+  # true (défaut) = ouvre la fenêtre au démarrage, le tray reste un compagnon actif.
+  # false = mode zone de notification seule (équivaut à l'option --no-gui).
+  # Repli automatique sur le tray seul si pywebview/WebView2 est indisponible.
+  enabled: true
+
 history:
   enabled: true           # archive chaque transcription dans une base SQLite locale
   path: whisperty.db      # fichier de la base (à côté de config.yaml par défaut)

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Whisperty</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="window">
+
+  <!-- ── BARRE DE TITRE ─────────────────────────────────────────────────── -->
+  <div class="titlebar">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      <span class="brand-name">Whisperty</span>
+      <span class="brand-sub">· dictée vocale locale</span>
+    </div>
+    <div class="win-controls">
+      <button class="win-btn" data-win="minimize" title="Réduire">
+        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1"/></svg>
+      </button>
+      <button class="win-btn" data-win="maximize" title="Agrandir">
+        <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1" rx="1"/></svg>
+      </button>
+      <button class="win-btn close" data-win="close" title="Fermer (réduire dans la zone de notification)">
+        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" stroke-width="1.1"/><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" stroke-width="1.1"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <!-- ── SIDEBAR ──────────────────────────────────────────────────────── -->
+    <div class="sidebar">
+      <div class="nav-title">Navigation</div>
+
+      <button class="nav-btn active" data-tab="dashboard">
+        <span class="hl"></span><span class="bar"></span>
+        <span class="ico">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="6" height="6" rx="1.5"/><rect x="10" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="10" width="6" height="6" rx="1.5"/><rect x="10" y="10" width="6" height="6" rx="1.5"/></svg>
+          Dashboard
+        </span>
+      </button>
+
+      <button class="nav-btn" data-tab="configuration">
+        <span class="hl"></span><span class="bar"></span>
+        <span class="ico">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><line x1="3" y1="5" x2="15" y2="5"/><circle cx="11" cy="5" r="2.1" fill="#09090f"/><line x1="3" y1="13" x2="15" y2="13"/><circle cx="6" cy="13" r="2.1" fill="#09090f"/></svg>
+          Configuration
+        </span>
+      </button>
+
+      <button class="nav-btn" data-tab="historique">
+        <span class="hl"></span><span class="bar"></span>
+        <span class="ico">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="9" cy="9" r="6.5"/><line x1="9" y1="5.5" x2="9" y2="9"/><line x1="9" y1="9" x2="11.5" y2="10.5"/></svg>
+          Historique
+        </span>
+      </button>
+
+      <div class="sidebar-footer">
+        <div class="badge-offline">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#22c55e" stroke-width="1.4"><rect x="2.5" y="6" width="9" height="6.5" rx="1.5"/><path d="M4.2 6V4.4a2.8 2.8 0 0 1 5.6 0V6"/></svg>
+          <span>Hors-ligne garanti</span>
+        </div>
+        <div class="model-card">
+          <div class="k">Modèle chargé</div>
+          <div class="v"><span id="sb-model">whisper-small</span> · <span id="sb-device">CPU</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ZONE PRINCIPALE ──────────────────────────────────────────────── -->
+    <div class="main">
+
+      <!-- ===== DASHBOARD ===== -->
+      <section id="screen-dashboard" class="screen active" style="padding:22px 24px 26px; gap:16px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <div class="segmented" id="mode-switch">
+            <button class="seg active" data-mode="dictee"><span>Dictée</span></button>
+            <button class="seg" data-mode="live"><span>Live continu</span></button>
+            <button class="seg" data-mode="conference"><span>Conférence</span></button>
+          </div>
+          <div style="display:flex; align-items:center; gap:7px;">
+            <span style="font-size:11px; color:var(--dim); font-weight:500;">Raccourci</span>
+            <div id="dash-hotkey" style="display:flex; gap:3px; align-items:center;"></div>
+          </div>
+        </div>
+
+        <div class="status-card">
+          <div class="status-row" id="status-row"><!-- rempli par JS --></div>
+          <div class="wave" id="wave"><!-- rempli par JS --></div>
+          <div id="action-slot"><!-- bouton Démarrer/Arrêter/Traitement --></div>
+        </div>
+
+        <div class="card">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <span class="card-title">Dernière transcription</span>
+            <button class="btn-ghost" id="copy-last">
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><path d="M2 8.5V2.5A1 1 0 0 1 3 1.5h6"/></svg>
+              <span>Copier</span>
+            </button>
+          </div>
+          <p class="last-text" id="last-text">—</p>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Mots dictés</div><div class="v" id="stat-words">0</div><div class="sub">aujourd'hui</div></div>
+          <div class="stat"><div class="k">Durée totale</div><div class="v"><span id="stat-dur">0</span><span class="u"> min</span></div><div class="sub">aujourd'hui (estimée)</div></div>
+          <div class="stat"><div class="k">Transcriptions</div><div class="v" id="stat-trans">0</div><div class="sub">aujourd'hui</div></div>
+        </div>
+      </section>
+
+      <!-- ===== CONFIGURATION ===== -->
+      <section id="screen-configuration" class="screen" style="padding:22px 24px 0; gap:11px; min-height:100%;">
+
+        <!-- Modèle -->
+        <div class="accordion open" data-acc="modele">
+          <button class="acc-head"><span class="t"><span class="name">Modèle</span><span class="desc">Taille, périphérique de calcul et langue</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div style="margin-bottom:14px;">
+              <span class="field-label">Taille du modèle</span>
+              <div id="model-opts" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              <label style="display:block;"><span class="field-label">Périphérique</span>
+                <div class="select-wrap"><select id="cfg-device"><option value="CPU">CPU</option><option value="CUDA">CUDA (GPU)</option></select><span class="chev">▼</span></div>
+              </label>
+              <label style="display:block;"><span class="field-label">Langue</span>
+                <div class="select-wrap"><select id="cfg-langue"><option value="fr">Français</option><option value="en">Anglais</option><option value="auto">Détection auto</option></select><span class="chev">▼</span></div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio -->
+        <div class="accordion" data-acc="audio">
+          <button class="acc-head"><span class="t"><span class="name">Audio</span><span class="desc">Microphone et détection d'activité vocale</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <label style="display:block; margin-bottom:16px;"><span class="field-label">Microphone</span>
+              <div class="select-wrap"><select id="cfg-mic"></select><span class="chev">▼</span></div>
+            </label>
+            <label style="display:block; margin-bottom:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:baseline;"><span class="field-label" style="margin-bottom:0;">Seuil VAD (niveau RMS)</span><span style="font-size:12.5px; color:var(--violet); font-weight:600;" id="vad-label">0.010</span></div>
+              <input type="range" min="0" max="100" step="1" id="cfg-vad" style="margin-top:9px;">
+            </label>
+            <label style="display:block;">
+              <div style="display:flex; justify-content:space-between; align-items:baseline;"><span class="field-label" style="margin-bottom:0;">Silence avant arrêt</span><span style="font-size:12.5px; color:var(--violet); font-weight:600;" id="silence-label">1500 ms</span></div>
+              <input type="range" min="200" max="2500" step="100" id="cfg-silence" style="margin-top:9px;">
+            </label>
+          </div>
+        </div>
+
+        <!-- Raccourci -->
+        <div class="accordion" data-acc="raccourci">
+          <button class="acc-head"><span class="t"><span class="name">Raccourci clavier</span><span class="desc">Combinaison globale d'activation</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body" style="display:flex; align-items:center; gap:12px;">
+            <div style="flex:1; display:flex; align-items:center; gap:7px; padding:11px 14px; border-radius:9px; background:var(--panel-2); border:1px solid rgba(255,255,255,0.1);" id="combo-display"></div>
+            <button class="seg soft" id="combo-capture" style="border:1px solid rgba(168,85,247,0.4); background:rgba(168,85,247,0.13); color:var(--violet-2); padding:10px 16px; border-radius:9px;"><span>Modifier</span></button>
+          </div>
+        </div>
+
+        <!-- Injection -->
+        <div class="accordion" data-acc="injection">
+          <button class="acc-head"><span class="t"><span class="name">Injection du texte</span><span class="desc">Comment le texte est inséré dans l'application active</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <span class="field-label">Méthode</span>
+            <div class="segmented sm" id="inj-switch" style="margin-bottom:16px;">
+              <button class="seg soft active" data-inj="presse"><span>Presse-papiers</span></button>
+              <button class="seg soft" data-inj="frappe"><span>Frappe simulée</span></button>
+            </div>
+            <label style="display:block;">
+              <div style="display:flex; justify-content:space-between; align-items:baseline;"><span class="field-label" style="margin-bottom:0;">Délai entre frappes (méthode frappe)</span><span style="font-size:12.5px; color:var(--violet); font-weight:600;" id="delai-label">5 ms</span></div>
+              <input type="range" min="0" max="500" step="5" id="cfg-delai" style="margin-top:9px;">
+            </label>
+          </div>
+        </div>
+
+        <!-- IA locale -->
+        <div class="accordion" data-acc="ia">
+          <button class="acc-head"><span class="t"><span class="name">IA locale</span><span class="desc">Reformulation et ponctuation via un LLM local</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 0 16px;">
+              <span style="font-size:13px; color:var(--text-2); font-weight:500;">Activer le post-traitement IA</span>
+              <button class="switch" id="ia-switch"><span class="knob"></span></button>
+            </div>
+            <div style="display:grid; grid-template-columns:1.4fr 1fr; gap:12px;" id="ia-fields">
+              <label style="display:block;"><span class="field-label">Endpoint (local uniquement)</span><input type="text" id="cfg-ia-endpoint" style="font-family:var(--mono); font-size:12.5px;"></label>
+              <label style="display:block;"><span class="field-label">Modèle LLM</span><input type="text" id="cfg-ia-model" style="font-size:12.5px;"></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Confidentialité -->
+        <div class="accordion" data-acc="confid" style="margin-bottom:8px;">
+          <button class="acc-head"><span class="t"><span class="name">Confidentialité</span><span class="desc">Garantir l'absence totale d'accès réseau</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 0;">
+              <span style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:13px; color:var(--text-2); font-weight:500;">local_files_only</span>
+                <span id="local-badge" class="badge-offline" style="padding:3px 8px; font-size:10.5px; border-radius:6px;">
+                  <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="#22c55e" stroke-width="1.5"><rect x="2.5" y="6" width="9" height="6.5" rx="1.5"/><path d="M4.2 6V4.4a2.8 2.8 0 0 1 5.6 0V6"/></svg>
+                  <span>Hors-ligne garanti</span>
+                </span>
+              </span>
+              <button class="switch green on" id="local-switch"><span class="knob"></span></button>
+            </div>
+            <p style="margin:6px 0 0; font-size:11.5px; line-height:1.55; color:var(--dim);">Aucune donnée audio ni transcription ne quitte cet ordinateur. Les modèles déjà téléchargés sont chargés depuis le disque local.</p>
+          </div>
+        </div>
+
+        <!-- Barre d'enregistrement -->
+        <div class="save-bar">
+          <span class="saved-note" id="saved-note" style="display:none;">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4ade80" stroke-width="1.6"><path d="M2.5 7.5l3 3 6-7"/></svg>Configuration enregistrée
+          </span>
+          <button class="btn-primary sm" id="save-config"><span>Sauvegarder</span></button>
+        </div>
+      </section>
+
+      <!-- ===== HISTORIQUE ===== -->
+      <section id="screen-historique" class="screen" style="padding:22px 24px 26px; gap:14px;">
+        <div class="hist-head">
+          <div style="display:flex; align-items:baseline; gap:10px;">
+            <span class="hist-title">Historique</span>
+            <span class="pill"><span id="hist-total">0</span> transcriptions</span>
+          </div>
+        </div>
+
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="#64748b" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="13.5" y2="13.5"/></svg>
+          <input type="text" id="hist-search" placeholder="Rechercher dans les transcriptions…">
+        </div>
+
+        <div class="hist-filters">
+          <div class="segmented sm" id="hist-mode">
+            <button class="seg soft active" data-hmode="all"><span>Tous</span></button>
+            <button class="seg soft" data-hmode="dictee"><span>Dictée</span></button>
+            <button class="seg soft" data-hmode="live"><span>Live</span></button>
+            <button class="seg soft" data-hmode="conference"><span>Conférence</span></button>
+          </div>
+          <div class="select-wrap" style="margin-left:auto;">
+            <select id="hist-dur" style="font-size:12px; font-weight:500; padding:7px 28px 7px 11px; color:var(--text-3);">
+              <option value="0">Tous · mots</option>
+              <option value="40">> 40 mots</option>
+              <option value="80">> 80 mots</option>
+              <option value="150">> 150 mots</option>
+            </select><span class="chev">▼</span>
+          </div>
+        </div>
+
+        <div class="hist-list" id="hist-list"></div>
+
+        <div class="pager">
+          <button id="hist-prev"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3L4.5 6.5L8 10"/></svg></button>
+          <span class="info">Page <span id="hist-page">1</span> / <span id="hist-pages">1</span></span>
+          <button id="hist-next"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg></button>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

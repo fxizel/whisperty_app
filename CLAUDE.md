@@ -19,8 +19,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Lancer l'application (icône tray + raccourci global)
+# Lancer l'application (fenêtre WebView2 + icône tray + raccourci global)
 python -m whisperty
+# Mode zone de notification seule (sans fenêtre ; = gui.enabled: false)
+python -m whisperty --no-gui
 
 # Démo capture audio seule (sans modèle)
 python -m whisperty.recorder
@@ -53,6 +55,9 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
 | `conference.py` | Mode réunion : micro + sortie système simultanés, mixés (itération 1) | fait (V2) |
 | `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
+| `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
+| `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
+| `web/` | Assets de l'UI (`index.html`, `styles.css`, `app.js`) — rendu fidèle de la maquette, **police système** (pas de Google Fonts) | fait (V2) |
 
 ## Concurrence (à préserver)
 
@@ -68,6 +73,15 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
   l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
   suspect, sans bloquer la capture loopback.
+- **Interface fenêtre (V2)** : `webview.start()` exige le **thread principal** ; le tray tourne
+  donc **détaché** (`Tray.run_detached()`) et `launch_gui()` bloque le thread principal. Les
+  méthodes de `GuiApi` (pont) et les actions tray s'exécutent sur d'AUTRES threads et délèguent à
+  `WhispertyApp` (déjà sérialisé par `_lock`). Le contrôle de la fenêtre (`minimize`/`hide`/`show`/
+  `destroy`) est appelé cross-thread — **vérifié OK** sur le backend edgechromium (NE PAS lire de
+  *propriétés* WebView2 ni appeler `evaluate_js` depuis un thread non-UI : cela lève `E_NOINTERFACE`).
+  `quit()` met `_quitting=True` PUIS `window.destroy()` (débloque `start()` ; `on_closing` autorise
+  alors la fermeture, sinon il masque dans le tray). `_quit_event` débloque le thread principal si la
+  fenêtre n'a pas pu démarrer après un tray déjà détaché.
 
 ## Décisions d'architecture à respecter
 
@@ -112,6 +126,27 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   Distinction PAR SOURCE uniquement (micro = `mic_label`, sortie = `system_label`) — déterministe,
   100 % local. La diarisation des interlocuteurs individuels (pyannote = PyTorch + modèles *gated* HF)
   est **écartée** (tension zéro-réseau) ; à n'envisager qu'en option hors-ligne désactivée par défaut.
+- **Interface fenêtre (V2, `gui.py` + `web/`)** : la maquette HTML est rendue par **Edge WebView2**
+  via `pywebview` (préinstallé sur Win10/11). `pywebview` est une **dépendance optionnelle** : absente
+  (ou WebView2 indisponible), l'app retombe sur le **mode tray seul** historique (`gui.enabled: false`
+  ou `--no-gui`). Le pont JS appelle `window.pywebview.api.*` (méthodes de `GuiApi`) ; `app.js` interroge
+  l'état par *polling* (`poll()` ~5×/s) — pas de push Python→JS (évite `evaluate_js` cross-thread).
+  ⚠️ **Zéro-réseau dans l'UI** : la maquette chargeait Google Fonts — **retiré** (police système Segoe UI).
+  AUCUN asset/CDN/fetch distant ne doit être introduit dans `web/`. `app.js` a une couche de données qui
+  préfère le pont et retombe sur des **données factices** (sert d'aperçu autonome sans backend).
+  ⚠️ **`GuiApi` : références natives PRIVÉES** — pywebview introspecte l'objet `js_api` (`dir()`+`getattr`,
+  `webview/util.py:get_functions`) et **récurse dans tout attribut public non-callable**. La fenêtre et l'app
+  DOIVENT donc être `self._window`/`self._app` (préfixe `_`) : exposées en public, pywebview parcourrait le
+  graphe natif Window→WinForms→WebView2 hors thread UI → tempête `E_NOINTERFACE` + récursion infinie sur
+  `Rectangle.Empty`, au DÉMARRAGE. Déplacement de la fenêtre : `win_move` (→ `SetWindowPos`, thread-safe) avec
+  un décalage calculé en JS (`screenX − clientX`) — NE JAMAIS lire `window.x/.y` (→ `Control.Left/Top` hors
+  thread UI = plantage).
+- **Écriture de config (V2, `configio.py`)** : l'écran Configuration enregistre via `update_yaml_file`
+  (édition **ligne par ligne** préservant commentaires/ordre) — PAS `yaml.safe_dump` (détruirait les
+  commentaires) ni `ruamel` (dépendance évitée). `apply_config_from_gui` mute les dataclasses en place
+  (les sous-systèmes partagent ces objets), réécrit le fichier, puis applique à chaud : reset du modèle
+  (taille/device/`local_files_only`), `reload_hotkey()`, reconstruction injecteur/LLM. La **langue** est
+  lue à chaque transcription → pas de rechargement de modèle.
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.
@@ -120,6 +155,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   par huggingface-hub — un module `typer.py` la masquerait).
 - **Packaging** : `config.yaml`/`dictionary.txt` ne sont PAS embarqués dans l'exe (éditables) ;
   ils doivent être déposés à côté de `whisperty.exe`. `upx=False` (UPX corrompt les DLL natives).
+  Les **assets `whisperty/web/`** (UI), eux, DOIVENT être embarqués (`--add-data "whisperty/web;whisperty/web"`) :
+  `gui.web_dir()` résout le dossier en source comme en build figé (`sys._MEIPASS`).
 
 ## Conventions
 

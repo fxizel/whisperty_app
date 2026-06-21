@@ -67,6 +67,7 @@ C'est la contrainte cardinale du projet : **aucune donnée ne sort de la machine
 - 🔔 **Icône de notification** avec statut (gris = prêt, rouge = enregistrement, orange = transcription, bleu = capture live, vert = réunion, violet = assistant de réunion).
 
 **Au-delà de la dictée**
+- 🖥️ **Interface fenêtre** — tableau de bord (statut live, dernière transcription, statistiques du jour), **configuration visuelle** et **historique navigable** (recherche, filtres, copie/suppression), rendus via Edge WebView2. 100 % local : police système, **aucun asset distant**. Le tray reste un compagnon ; fermer la fenêtre la réduit dans la zone de notification.
 - 📜 **Historique local** (SQLite) — purge automatique, « Copier la dernière transcription » depuis le tray.
 - 📂 **Import de fichiers audio** (WAV / MP3 / M4A / FLAC…) — transcrit, copié, archivé (décodage PyAV, sans ffmpeg).
 - 🤖 **Mode IA local** — reponctuation / correction via un LLM **sur la machine** (Ollama, LM Studio…). Désactivé par défaut.
@@ -107,14 +108,20 @@ python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
 **3. Lancer**
 
 ```powershell
-python -m whisperty                       # icône tray + raccourci global
+python -m whisperty                       # fenêtre + icône tray + raccourci global
+python -m whisperty --no-gui              # zone de notification seule (sans fenêtre)
 python -m whisperty --config mon.yaml     # configuration personnalisée
 ```
 
 **4. Dicter**
 
 Appuyez sur **Ctrl+Alt+Espace**, parlez, ré-appuyez (ou faites une pause) : le texte
-s'insère dans la fenêtre active. Clic droit sur l'icône tray pour la config ou pour quitter.
+s'insère dans la fenêtre active. La **fenêtre** s'ouvre au démarrage (tableau de bord,
+configuration, historique) ; sa croix la réduit dans la zone de notification, d'où un
+clic droit ou « Ouvrir Whisperty » (double-clic) la ramène. Tout reste piloté par le tray.
+
+> La fenêtre utilise **Edge WebView2** (préinstallé sur Windows 10/11). Si `pywebview` ou
+> WebView2 est absent, Whisperty démarre automatiquement en **mode tray seul**.
 
 > 💡 Pour tester uniquement la capture micro, sans modèle : `python -m whisperty.recorder`
 
@@ -137,10 +144,28 @@ l'application après modification.
 | `live` | `device`, `block_duration`, `max_segment`, `silence_duration`, `vad_threshold`, `transcript_dir` |
 | `conference` | `enabled`, `system_device`, `mic_device`, `distinguish_speakers`, `mic_label`, `system_label`, `export_dir`, `export_format` |
 | `meeting` | `user_name`, `user_context`, `auto_inject`, `context_segments`, `reply_prompt` |
+| `gui` | `enabled` (ouvre la fenêtre WebView2 ; `false` ou `--no-gui` = zone de notification seule) |
 
 > Le fichier `config.yaml` livré est abondamment commenté : c'est la référence la plus à jour.
+> L'écran **Configuration** de la fenêtre enregistre directement dans `config.yaml` **en
+> préservant les commentaires** (modèle, langue, périphérique, VAD, raccourci, injection, IA,
+> `local_files_only`) et applique la plupart des changements à chaud.
 
 ## Fonctions avancées
+
+### 🖥️ Interface fenêtre
+Au démarrage, Whisperty ouvre une fenêtre (Edge WebView2) à trois écrans :
+- **Dashboard** — sélecteur de mode (Dictée / Live / Conférence), statut temps réel avec
+  visualiseur audio, bouton Démarrer/Arrêter, dernière transcription (copie), statistiques du jour.
+- **Configuration** — modèle, périphérique, langue, micro, seuil VAD, silence, **raccourci**
+  (capture en direct), méthode d'injection, IA locale, `local_files_only`. « Sauvegarder » écrit
+  `config.yaml` (commentaires préservés) et applique à chaud.
+- **Historique** — recherche plein-texte, filtres par source, copie/suppression, pagination.
+
+Le tray reste un compagnon actif : la croix réduit dans la zone de notification, « Ouvrir
+Whisperty » (ou double-clic sur l'icône) ramène la fenêtre, « Quitter » ferme l'application.
+100 % local — aucune police ni ressource distante. `gui.enabled: false` (ou `--no-gui`) revient
+au mode zone de notification seule.
 
 ### 📜 Historique local
 Chaque transcription est archivée dans `whisperty.db` (SQLite, à côté de `config.yaml`).
@@ -237,6 +262,7 @@ python tests/test_logic.py
 | `test_extra.py` | point d'entrée `__main__`, branches d'erreur loopback, écouteurs de raccourci |
 | `test_conference_extra.py` | réunion : démarrage sans source, robustesse des callbacks |
 | `test_transcriber_load.py` | chargement du modèle + **garde hors-ligne** (`HF_HUB_OFFLINE`) |
+| `test_gui.py` | interface : écriture chirurgicale de `config.yaml` (commentaires préservés), `History.delete`, pont `GuiApi`, `apply_config_from_gui` |
 
 Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Windows et Linux
 (Python 3.10 → 3.12), vérifie un **seuil de couverture de 80 %** et passe `ruff` sur le code.
@@ -253,6 +279,10 @@ pyinstaller whisperty.spec    # produit dist\whisperty.exe (onefile)
 > ⚠️ `config.yaml` et `dictionary.txt` ne sont **pas** embarqués dans l'exe (volontaire : ils
 > restent éditables). Copiez-les **à côté de `dist\whisperty.exe`**, sinon l'app tourne sur ses
 > réglages par défaut. Le modèle Whisper doit aussi être déjà en cache (cf. *Démarrage rapide*).
+>
+> Les **assets de l'interface** (`whisperty/web/`), eux, **doivent** être embarqués
+> (`--add-data "whisperty/web;whisperty/web"` dans le `.spec`) : `gui.web_dir()` les résout en
+> build figé via `sys._MEIPASS`.
 
 Lancer Whisperty au démarrage de Windows (par utilisateur, sans droits admin) :
 
@@ -290,6 +320,8 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |
 | `loopback.py` · `live.py` | Capture loopback (soundcard/WASAPI) + transcription live |
 | `conference.py` · `meeting.py` | Mode réunion + assistant de réunion |
+| `gui.py` · `web/` | Fenêtre WebView2 (pywebview) + pont Python↔JS + assets UI (police système) |
+| `configio.py` | Écriture chirurgicale de `config.yaml` (préserve commentaires/ordre) |
 
 Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md).
 
@@ -301,3 +333,4 @@ Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md)
 - [x] Raccourci global + icône tray + configuration YAML
 - [x] Packaging (exe) + démarrage automatique
 - [x] **V2** — import audio, IA locale, historique SQLite, profils, transcription live, mode réunion, assistant
+- [x] **Interface fenêtre** (WebView2) — dashboard, configuration visuelle, historique navigable

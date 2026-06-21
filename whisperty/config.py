@@ -172,6 +172,18 @@ class MeetingConfig:
 
 
 @dataclass
+class GuiConfig:
+    """Interface fenêtre (WebView2 via pywebview, V2).
+
+    ``enabled: true`` (défaut) ouvre la fenêtre au démarrage (le tray reste actif,
+    en compagnon). ``false`` = mode tray seul historique. Si ``pywebview`` ou
+    WebView2 est indisponible, repli automatique sur le tray seul.
+    """
+
+    enabled: bool = True
+
+
+@dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
@@ -185,6 +197,7 @@ class Config:
     live: LiveConfig = field(default_factory=LiveConfig)
     conference: ConferenceConfig = field(default_factory=ConferenceConfig)
     meeting: MeetingConfig = field(default_factory=MeetingConfig)
+    gui: GuiConfig = field(default_factory=GuiConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
     @classmethod
@@ -214,6 +227,7 @@ class Config:
             live=_build(LiveConfig, data.get("live")),
             conference=_build(ConferenceConfig, data.get("conference")),
             meeting=_build(MeetingConfig, data.get("meeting")),
+            gui=_build(GuiConfig, data.get("gui")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
         return cfg

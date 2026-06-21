@@ -64,6 +64,15 @@ class FakeHistory:
     def last_text(self):
         return self._last
 
+    def recent(self, limit=10):
+        return []
+
+    def delete(self, entry_id):
+        pass
+
+    def clear(self):
+        pass
+
     def close(self):
         self.closed = True
 

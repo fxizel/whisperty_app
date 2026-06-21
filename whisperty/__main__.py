@@ -28,9 +28,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=_default_config_path(),
         help="Chemin du fichier de configuration.",
     )
+    parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        help="Démarre en mode zone de notification seule (sans fenêtre).",
+    )
     args = parser.parse_args(argv)
 
     config = Config.load(args.config)
+    if args.no_gui:
+        config.gui.enabled = False
     setup_logging(config)
 
     app = WhispertyApp(config)

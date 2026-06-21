@@ -67,6 +67,7 @@ class Tray:
         live_devices: Optional[list[dict]] = None,
         on_start_conference: Optional[Callable[[Optional[object]], None]] = None,
         on_stop_conference: Optional[Callable[[], None]] = None,
+        on_show: Optional[Callable[[], None]] = None,
     ) -> None:
         from pystray import Icon, Menu, MenuItem
 
@@ -78,6 +79,13 @@ class Tray:
             return lambda icon, item: callback() if callback else None
 
         menu = Menu(
+            # Action par défaut (double-clic gauche) : ré-ouvrir la fenêtre si elle existe.
+            MenuItem(
+                "Ouvrir Whisperty",
+                _action(on_show),
+                default=True,
+                visible=on_show is not None,
+            ),
             MenuItem("Démarrer / Arrêter la dictée", _action(on_toggle)),
             MenuItem(
                 "Transcription live (sortie audio)",
@@ -196,6 +204,14 @@ class Tray:
     def run(self) -> None:
         """Boucle bloquante (tient le thread principal jusqu'à Quitter)."""
         self._icon.run()
+
+    def run_detached(self) -> None:
+        """Démarre le tray dans un thread dédié (backend win32) sans bloquer.
+
+        Utilisé quand le thread principal est tenu par la fenêtre WebView2 : le tray
+        reste un compagnon actif. ``stop()`` reste valable depuis n'importe quel thread.
+        """
+        self._icon.run_detached()
 
     def stop(self) -> None:
         self._icon.stop()

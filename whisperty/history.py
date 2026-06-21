@@ -165,6 +165,23 @@ class History:
         entries = self.recent(1)
         return entries[0].text if entries else None
 
+    def delete(self, entry_id: int) -> None:
+        """Supprime une transcription par son ``id``. No-op si désactivé/fermé/absent."""
+        if not self.enabled or self._closed:
+            return
+        try:
+            entry_id = int(entry_id)
+        except (TypeError, ValueError):
+            logger.warning("Suppression historique : id invalide (%r).", entry_id)
+            return
+        try:
+            with self._lock:
+                conn = self._connect()
+                conn.execute("DELETE FROM transcriptions WHERE id = ?", (entry_id,))
+                conn.commit()
+        except sqlite3.Error:
+            logger.warning("Suppression d'une entrée d'historique échouée.", exc_info=True)
+
     def clear(self) -> None:
         """Vide l'historique."""
         if not self.enabled or self._closed:

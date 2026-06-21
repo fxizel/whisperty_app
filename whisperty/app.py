@@ -94,6 +94,7 @@ class WhispertyApp:
             live_devices=live_devices,
             on_start_conference=self.start_conference if config.conference.enabled else None,
             on_stop_conference=self.stop_conference if config.conference.enabled else None,
+            on_show=self.show_window,
         )
         # V2 : assistant de réunion (questions → réponses LLM locales).
         self.meeting = MeetingAssistant(
@@ -109,7 +110,10 @@ class WhispertyApp:
         self._state = TrayState.IDLE
         self._lock = threading.RLock()
         self._quitting = False
+        self._quit_event = threading.Event()
         self._listener = None
+        # Interface fenêtre (GuiApi) si lancée ; None en mode tray seul.
+        self._gui = None
         # Application active capturée au démarrage de la dictée (profils de contexte).
         self._active_app: str | None = None
 
@@ -553,19 +557,238 @@ class WhispertyApp:
         except Exception:  # noqa: BLE001
             logger.info("Configuration : %s", path)
 
+    # -- interface fenêtre (V2) ------------------------------------------------
+    def show_window(self) -> None:
+        """Ré-affiche la fenêtre (menu tray « Ouvrir » / double-clic). No-op si absente.
+
+        Appelée depuis le thread tray : on lit ``_gui`` sous ``_lock`` (publication/
+        destruction concurrente), puis on appelle la fenêtre hors verrou (l'appel est
+        marshalé vers le thread UI et ``destroy()`` concurrent est rattrapé par try/except).
+        """
+        with self._lock:
+            gui = self._gui
+            window = getattr(gui, "_window", None) if gui is not None else None
+        if window is None:
+            return
+        try:
+            window.show()
+            window.restore()
+        except Exception:  # noqa: BLE001
+            logger.exception("Affichage de la fenêtre échoué")
+
+    def apply_config_from_gui(self, payload: dict) -> dict:
+        """Applique et persiste les réglages de l'écran Configuration.
+
+        Met à jour la config en mémoire (les sous-systèmes partagent ces dataclasses),
+        réécrit config.yaml en **préservant les commentaires** (``configio``), puis
+        applique les effets à chaud (rechargement modèle / raccourci / injecteur / LLM).
+        Tout échec est capturé : l'enregistrement ne doit jamais faire planter l'app.
+        """
+        from .configio import update_yaml_file
+
+        c = self.config
+        updates: dict[str, object] = {}
+        reload_model = hotkey_changed = output_changed = ai_changed = device_changed = False
+
+        try:
+            # -- transcription (model/device/local_files_only => rechargement) --
+            if "model" in payload and str(payload["model"]) != c.transcription.model:
+                c.transcription.model = str(payload["model"])
+                updates["transcription.model"] = c.transcription.model
+                reload_model = True
+            if "device" in payload:
+                dev = "cuda" if str(payload["device"]).lower() == "cuda" else "cpu"
+                if dev != c.transcription.device:
+                    c.transcription.device = dev
+                    updates["transcription.device"] = dev
+                    reload_model = True
+            if "localOnly" in payload:
+                lo = bool(payload["localOnly"])
+                if lo != c.transcription.local_files_only:
+                    c.transcription.local_files_only = lo
+                    updates["transcription.local_files_only"] = lo
+                    reload_model = True
+            # langue : lue à chaque transcription => pas de rechargement.
+            if "langue" in payload:
+                raw = payload["langue"]
+                lang = None if raw in (None, "", "auto") else str(raw)
+                if lang != c.transcription.language:
+                    c.transcription.language = lang
+                    updates["transcription.language"] = lang
+            # -- audio (bornes raisonnables : l'UI est cliente, on ne fait pas confiance) --
+            if "vad" in payload:
+                vad = min(1.0, max(0.0, float(payload["vad"]) / 1000.0))
+                if vad != c.audio.vad_threshold:
+                    c.audio.vad_threshold = vad
+                    updates["audio.vad_threshold"] = vad
+            if "silence" in payload:
+                sil = min(60.0, max(0.0, float(payload["silence"]) / 1000.0))
+                if sil != c.audio.silence_duration:
+                    c.audio.silence_duration = sil
+                    updates["audio.silence_duration"] = sil
+            if "mic" in payload:
+                mic = payload["mic"]
+                mic = None if mic in (None, "") else mic
+                if mic != c.audio.device:
+                    c.audio.device = mic
+                    updates["audio.device"] = mic
+                    device_changed = True
+            # -- raccourci --
+            if payload.get("combo"):
+                combo = self._safe_combo(str(payload["combo"]))
+                if combo != c.hotkey.combo:
+                    c.hotkey.combo = combo
+                    updates["hotkey.combo"] = combo
+                    hotkey_changed = True
+            # -- injection --
+            if "injection" in payload:
+                method = "type" if payload["injection"] == "frappe" else "paste"
+                if method != c.output.method:
+                    c.output.method = method
+                    updates["output.method"] = method
+                    output_changed = True
+            if "delai" in payload:
+                delay = min(5.0, max(0.0, float(payload["delai"]) / 1000.0))
+                if delay != c.output.type_delay:
+                    c.output.type_delay = delay
+                    updates["output.type_delay"] = delay
+                    output_changed = True
+            # -- IA locale --
+            if "ia" in payload:
+                ia = bool(payload["ia"])
+                if ia != c.ai.enabled:
+                    c.ai.enabled = ia
+                    updates["ai.enabled"] = ia
+                    ai_changed = True
+            if "iaEndpoint" in payload and str(payload["iaEndpoint"]) != c.ai.endpoint:
+                c.ai.endpoint = str(payload["iaEndpoint"])
+                updates["ai.endpoint"] = c.ai.endpoint
+                ai_changed = True
+            if "iaModel" in payload and str(payload["iaModel"]) != c.ai.model:
+                c.ai.model = str(payload["iaModel"])
+                updates["ai.model"] = c.ai.model
+                ai_changed = True
+        except (TypeError, ValueError):
+            logger.exception("Réglages invalides reçus de l'interface")
+            return {"ok": False, "error": "Réglages invalides."}
+
+        # Persistance fichier (préserve commentaires/ordre). Échec non bloquant.
+        if updates:
+            try:
+                update_yaml_file(self.config.resolve("config.yaml"), updates)
+            except OSError:
+                logger.exception("Écriture de config.yaml échouée")
+                return {"ok": False, "error": "Écriture de config.yaml impossible."}
+
+        # Effets à chaud (chacun isolé : un échec ne bloque pas les autres).
+        if device_changed:
+            try:
+                self.recorder.device = c.audio.device
+            except Exception:  # noqa: BLE001
+                logger.exception("MAJ du périphérique micro échouée")
+        if output_changed:
+            try:
+                self.injector = TextInjector(c.output)
+            except Exception:  # noqa: BLE001
+                logger.exception("Reconstruction de l'injecteur échouée")
+        if ai_changed:
+            try:
+                self.llm = LocalLLM(c.ai)
+            except Exception:  # noqa: BLE001
+                logger.exception("Reconstruction du client LLM échouée")
+        if reload_model:
+            self._reload_model()
+        if hotkey_changed:
+            self.reload_hotkey()
+        logger.info("Configuration enregistrée depuis l'interface (%d champ(s)).", len(updates))
+        return {"ok": True}
+
+    def _safe_combo(self, combo: str) -> str:
+        """Valide un combo (format pynput) ; repli sur le défaut documenté si invalide."""
+        try:
+            from pynput import keyboard
+
+            return self._validated_combo(keyboard, combo)
+        except Exception:  # noqa: BLE001
+            return combo
+
+    def _reload_model(self) -> None:
+        """Force le rechargement du modèle (taille/device/hors-ligne modifiés)."""
+        try:
+            self.transcriber._model = None  # rechargement paresseux au prochain usage
+        except Exception:  # noqa: BLE001
+            logger.exception("Réinitialisation du modèle échouée")
+            return
+        # Réchauffe immédiatement si l'app est au repos (sinon : au prochain usage).
+        with self._lock:
+            idle = self._state is TrayState.IDLE
+        if idle:
+            self._spawn_worker(self._preload)
+
+    def reload_hotkey(self) -> None:
+        """Reconstruit l'écouteur clavier global après changement de combinaison.
+
+        Démarre le nouvel écouteur AVANT d'arrêter l'ancien (pas de fenêtre sans
+        raccourci). L'échange ``_listener`` est fait sous ``_lock`` (course avec
+        ``quit()``) ; ``start()``/``stop()`` restent HORS verrou (potentiellement
+        bloquants). Si un arrêt est en cours, on n'installe pas l'écouteur (sinon
+        il resterait orphelin, ``quit()`` ayant déjà arrêté l'ancien).
+        """
+        try:
+            new = self._build_listener()
+            new.start()
+        except Exception:  # noqa: BLE001
+            logger.exception("Reconstruction du raccourci échouée ; ancien conservé.")
+            return
+        with self._lock:
+            if self._quitting:
+                old, install = None, False
+            else:
+                old, install = self._listener, True
+                self._listener = new
+        if not install:
+            try:
+                new.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        if old is not None and old is not new:
+            try:
+                old.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        logger.info(
+            "Raccourci rechargé : %s (%s).", self.config.hotkey.combo, self.config.hotkey.mode
+        )
+
     def quit(self) -> None:
         with self._lock:
             if self._quitting:
                 return
             self._quitting = True
         logger.info("Arrêt de Whisperty.")
+        # Détruit la fenêtre pour débloquer webview.start() sur le thread principal
+        # (on_closing autorise la fermeture car _quitting est vrai). Lecture de _gui
+        # sous verrou (course possible avec show_window depuis le thread tray).
+        with self._lock:
+            gui = self._gui
+            window = getattr(gui, "_window", None) if gui is not None else None
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self.recorder.stop()  # idempotent (no-op si pas d'enregistrement)
         except Exception:  # noqa: BLE001
             pass
-        if self._listener is not None:
+        # Capture _listener sous verrou (course avec reload_hotkey depuis le thread du pont).
+        with self._lock:
+            listener = self._listener
+            self._listener = None
+        if listener is not None:
             try:
-                self._listener.stop()
+                listener.stop()
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -591,6 +814,8 @@ class WhispertyApp:
             self.tray.stop()
         except Exception:  # noqa: BLE001
             pass
+        # Débloque un éventuel thread principal en attente (repli post-échec GUI).
+        self._quit_event.set()
 
     # -- raccourci clavier global ----------------------------------------------
     def _build_listener(self):
@@ -686,9 +911,39 @@ class WhispertyApp:
         threading.Thread(target=self._preload, daemon=True).start()
         self._listener = self._build_listener()
         self._listener.start()
-        # La boucle tray bloque le thread principal jusqu'à « Quitter ».
-        self.tray.run()
+        if not self._run_with_gui():
+            # Repli : boucle tray seule, bloquante (comportement historique).
+            self.tray.run()
         self.quit()
+
+    def _run_with_gui(self) -> bool:
+        """Ouvre la fenêtre (tray en compagnon détaché). False = repli tray seul.
+
+        ``webview.start()`` tient le thread principal ; le tray tourne détaché. Si
+        ``pywebview``/WebView2 est indisponible, on retombe proprement sur le tray seul.
+        """
+        if not self.config.gui.enabled:
+            return False
+        try:
+            import webview  # noqa: F401  (dépendance optionnelle)
+
+            from .gui import launch_gui
+        except Exception:  # noqa: BLE001
+            logger.info("pywebview indisponible : interface fenêtre désactivée (tray seul).")
+            return False
+        try:
+            self.tray.run_detached()  # tray dans un thread dédié
+        except Exception:  # noqa: BLE001
+            logger.exception("Tray détaché impossible ; repli tray bloquant.")
+            return False
+        try:
+            launch_gui(self)  # bloque jusqu'à destruction de la fenêtre
+        except Exception:  # noqa: BLE001
+            # Le tray est déjà détaché : on ne peut pas relancer tray.run() ici. On
+            # bloque le thread principal jusqu'à « Quitter » pour rester opérationnel.
+            logger.exception("Lancement de l'interface fenêtre échoué ; tray seul conservé.")
+            self._quit_event.wait()
+        return True
 
     def _preload(self) -> None:
         with self._lock:
