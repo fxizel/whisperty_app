@@ -46,7 +46,7 @@ meeting:
 def test_configio_preserves_comments(tmp_path: Path) -> None:
     p = tmp_path / "config.yaml"
     p.write_text(_SAMPLE, encoding="utf-8")
-    n_comments = sum(1 for l in _SAMPLE.splitlines() if l.strip().startswith("#"))
+    n_comments = sum(1 for ln in _SAMPLE.splitlines() if ln.strip().startswith("#"))
 
     update_yaml_file(p, {
         "audio.vad_threshold": 0.02,
@@ -64,8 +64,8 @@ def test_configio_preserves_comments(tmp_path: Path) -> None:
     assert d["transcription"]["language"] is None
     assert d["hotkey"]["combo"] == "<alt>+<shift>+d"
     # Commentaires préservés (nombre inchangé) + commentaire inline conservé.
-    assert sum(1 for l in after.splitlines() if l.strip().startswith("#")) == n_comments
-    vad_line = [l for l in after.splitlines() if "vad_threshold" in l][0]
+    assert sum(1 for ln in after.splitlines() if ln.strip().startswith("#")) == n_comments
+    vad_line = [ln for ln in after.splitlines() if "vad_threshold" in ln][0]
     assert "# seuil RMS" in vad_line
     # Bloc multi-lignes (reply_prompt) intact.
     assert "Tu rédiges une réponse pour {user_name}." in after
@@ -138,7 +138,9 @@ def test_history_delete(tmp_path: Path) -> None:
     from whisperty.history import History
 
     h = History(path=tmp_path / "h.db", max_entries=200, enabled=True)
-    h.add("un"); h.add("deux"); h.add("trois")
+    h.add("un")
+    h.add("deux")
+    h.add("trois")
     rows = h.recent(10)
     assert [r.text for r in rows] == ["trois", "deux", "un"]
     mid = [r for r in rows if r.text == "deux"][0].id
