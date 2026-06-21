@@ -81,6 +81,27 @@ def test_main_run_and_interrupt(tmp_path: Path) -> None:
     print("[extra 2] __main__.main : run normal + KeyboardInterrupt -> quit  OK")
 
 
+def test_version_module() -> None:
+    from whisperty import __version__
+    from whisperty.version import version_info, version_tuple
+
+    assert __version__ == "0.1.0"
+    assert version_tuple() == (0, 1, 0, 0)
+    assert version_info() == "0.1.0.0"
+    print("[extra 2b] version : __version__ + version_tuple/info  OK")
+
+
+def test_main_version_flag(capsys) -> None:
+    import whisperty.__main__ as m
+
+    with __import__("pytest").raises(SystemExit) as exc:
+        m.main(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "whisperty 0.1.0" in out
+    print("[extra 2c] __main__ --version  OK")
+
+
 # =============================================================================
 # 2) loopback : branches d'erreur (soundcard absent, garde bool, défaut, repli mic)
 # =============================================================================

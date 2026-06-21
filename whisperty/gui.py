@@ -23,10 +23,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from .version import __version__
+
 if TYPE_CHECKING:
     from .app import WhispertyApp
-
-logger = logging.getLogger(__name__)
 
 _MONTHS_FR = [
     "janv.", "févr.", "mars", "avr.", "mai", "juin",
@@ -106,6 +106,10 @@ class GuiApi:
     def win_move(self, x: int, y: int) -> dict:
         """Déplace la fenêtre à la position absolue (x, y) en pixels écran."""
         return self._safe(lambda: self._window.move(int(x), int(y)))
+
+    def get_version(self) -> dict:
+        """Numéro de version de l'application (source unique : whisperty.version)."""
+        return {"version": __version__}
 
     # -- état / dashboard ------------------------------------------------------
     def poll(self) -> dict:

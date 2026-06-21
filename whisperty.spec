@@ -65,6 +65,9 @@ hiddenimports += ["webview.platforms.edgechromium", "webview.platforms.winforms"
 icon = os.path.join(ROOT, "installer", "whisperty.ico")
 icon = icon if os.path.isfile(icon) else None
 
+version_file = os.path.join(ROOT, "build", "version_info.txt")
+version_arg = version_file if os.path.isfile(version_file) else None
+
 a = Analysis(
     [os.path.join(ROOT, "whisperty_launcher.py")],
     pathex=[ROOT],
@@ -92,6 +95,7 @@ exe = EXE(
     console=False,           # application de tray/fenêtre : pas de console
     disable_windowed_traceback=False,
     icon=icon,
+    version=version_arg,
 )
 
 coll = COLLECT(

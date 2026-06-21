@@ -115,6 +115,7 @@ const Mock = (() => {
     copy_text: (t) => { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} return { ok: true }; },
     win_minimize: () => ({ ok: true }), win_maximize: () => ({ ok: true }), win_close: () => ({ ok: true }),
     win_move: () => ({ ok: true }),
+    get_version: () => ({ version: "0.1.0" }),
   };
 })();
 
@@ -323,6 +324,16 @@ async function refreshState() {
   $("#wave").style.setProperty("--amp", amp.toFixed(2));
   // Flux live « au fil de l'eau » : met à jour la tuile si de nouveaux segments sont arrivés.
   pollLiveFeed(state, liveRev);
+}
+
+async function loadVersion() {
+  const data = (await call("get_version")) || {};
+  const version = data.version || "0.0.0";
+  const label = "v" + version;
+  const sb = $("#app-version");
+  if (sb) sb.textContent = label;
+  const cfg = $("#config-version");
+  if (cfg) cfg.textContent = "Whisperty " + label;
 }
 
 async function loadDashboard() {
@@ -768,6 +779,7 @@ function init() {
   bindTitlebar();
   renderStatus("idle");
   renderModeDesc();
+  loadVersion();
   loadDashboard();
   loadSources();
   refreshState();
@@ -779,4 +791,4 @@ function init() {
 // quand le pont devient disponible.
 if (document.readyState !== "loading") init();
 else document.addEventListener("DOMContentLoaded", init);
-window.addEventListener("pywebviewready", () => { loadDashboard(); loadSources(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "historique") loadHistory(); });
+window.addEventListener("pywebviewready", () => { loadVersion(); loadDashboard(); loadSources(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "historique") loadHistory(); });
