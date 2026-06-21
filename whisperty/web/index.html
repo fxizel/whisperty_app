@@ -102,6 +102,15 @@
 
         <div class="status-card">
           <div class="status-row" id="status-row"><!-- rempli par JS --></div>
+          <!-- Choix de la source audio (sortie système à capturer) — modes Live/Conférence.
+               Équivalent inline des sous-menus du tray ; masqué en Dictée (= micro de la config). -->
+          <div class="source-row" id="source-row" style="display:none;">
+            <span class="source-label">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 5.5h2.5l3-2.5v8l-3-2.5H2z"/><path d="M9.5 4.5a3 3 0 0 1 0 5"/></svg>
+              Source audio
+            </span>
+            <div class="select-wrap"><select id="dash-source"></select><span class="chev">▼</span></div>
+          </div>
           <div class="wave" id="wave"><!-- rempli par JS --></div>
           <div id="action-slot"><!-- bouton Démarrer/Arrêter/Traitement --></div>
         </div>

@@ -66,6 +66,13 @@ const Mock = (() => {
     get_config: () => JSON.parse(JSON.stringify(cfg)),
     save_config: (p) => { Object.assign(cfg, p); return { ok: true }; },
     list_microphones: () => cfg.mics,
+    list_audio_outputs: () => [
+      { value: null, label: "Sortie par défaut" },
+      { value: 0, label: "Haut-parleurs (Realtek) (défaut)" },
+      { value: 1, label: "Casque USB — Jabra Evolve" },
+      { value: 2, label: "Écran HDMI — Dell U2720Q" },
+    ],
+    set_source: () => ({ ok: true }),
     get_history: () => ({ total: history.length, items: history.map(h => ({ ...h })) }),
     delete_history: (id) => { history = history.filter(h => h.id !== id); return { ok: true }; },
     clear_history: () => { history = []; return { ok: true }; },
@@ -89,6 +96,8 @@ const ui = {
   tab: "dashboard",
   mode: "dictee",
   state: "idle",
+  source: null,        // sortie audio choisie pour les modes loopback (null = défaut)
+  sourceCount: 0,      // nombre d'options de source (sélecteur masqué si ≤ 1)
   cfg: null,
   hist: { all: [], query: "", mode: "all", words: 0, page: 1, expanded: null },
   capturing: false,
@@ -156,13 +165,23 @@ function ensureBars() {
   return waveBars;
 }
 
-const STATUS = {
-  idle:       { cls: "idle", color: "#86efac", label: "En attente" },
-  recording:  { cls: "rec",  color: "#f87171", label: "Enregistrement en cours" },
-  processing: { cls: "",     color: "#fbbf24", label: "Transcription…", spinner: true },
-  live:       { cls: "idle", color: "#93c5fd", label: "Live en cours" },
-  conference: { cls: "idle", color: "#86efac", label: "Réunion en cours" },
-  meeting:    { cls: "idle", color: "#c4b5fd", label: "Assistant de réunion" },
+// Code couleur partagé par mode : Dictée = violet, Live = vert, Conférence = ambre.
+// (Cohérent avec les catégories de l'historique, cf. CAT.) Source unique de vérité
+// pour teinter le sélecteur de mode, le bouton « Démarrer », le visualiseur et l'état.
+const MODE_THEME = {
+  dictee:     { accent: "#c084fc", ring: "rgba(168,85,247,0.5)", glow: "rgba(124,58,237,0.42)", grad: "linear-gradient(135deg,#7c3aed,#a855f7)", wave: "linear-gradient(180deg,#c084fc,#7c3aed)" },
+  live:       { accent: "#4ade80", ring: "rgba(34,197,94,0.5)",  glow: "rgba(22,163,74,0.45)",  grad: "linear-gradient(135deg,#16a34a,#22c55e)", wave: "linear-gradient(180deg,#4ade80,#16a34a)" },
+  conference: { accent: "#fbbf24", ring: "rgba(245,158,11,0.5)", glow: "rgba(217,119,6,0.45)",  grad: "linear-gradient(135deg,#d97706,#f59e0b)", wave: "linear-gradient(180deg,#fbbf24,#d97706)" },
+};
+function modeTheme() { return MODE_THEME[ui.mode] || MODE_THEME.dictee; }
+
+// États « en cours » (capture active) et leurs libellés.
+const RUNNING = ["recording", "live", "conference", "meeting"];
+const RUN_LABEL = {
+  recording:  "Enregistrement en cours",
+  live:       "Live en cours",
+  conference: "Réunion en cours",
+  meeting:    "Assistant de réunion",
 };
 
 // État transitoire « Arrêt en cours… » : l'arrêt d'un live/réunion/dictée n'est pas
@@ -174,7 +193,7 @@ function renderStopping() {
 }
 
 function onRecClick() {
-  const running = ["recording", "live", "conference", "meeting"].includes(ui.state);
+  const running = RUNNING.includes(ui.state);
   call("toggle_record").then(refreshState);
   if (running) {
     ui.stopping = true;
@@ -191,32 +210,35 @@ function renderStatus(state) {
     renderStopping();
     return;
   }
-  const s = STATUS[state] || STATUS.idle;
+  const t = modeTheme();
+
+  // Ligne d'état (point + libellé), teintée par le mode quand la capture est active.
   const row = $("#status-row");
-  if (s.spinner) {
-    row.innerHTML = `<span class="spinner"></span><span class="status-label" style="color:${s.color}">${s.label}</span>`;
+  if (state === "processing") {
+    row.innerHTML = `<span class="spinner"></span><span class="status-label" style="color:#fbbf24">Transcription…</span>`;
+  } else if (RUNNING.includes(state)) {
+    row.innerHTML = `<span class="dot pulse" style="background:${t.accent};--ring:${t.ring}"></span><span class="status-label" style="color:${t.accent}">${RUN_LABEL[state] || "En cours"}</span>`;
   } else {
-    const extra = state === "recording" ? "" : `box-shadow:0 0 10px ${s.color}99;`;
-    row.innerHTML = `<span class="dot ${s.cls}" style="background:${s.color};${extra}"></span><span class="status-label" style="color:${s.color}">${s.label}</span>`;
+    row.innerHTML = `<span class="dot idle"></span><span class="status-label" style="color:#86efac">En attente</span>`;
   }
 
-  // Visualiseur
+  // Visualiseur (barres aux couleurs du mode ; ambre pendant la transcription).
   const wave = $("#wave");
   if (state === "idle") {
     wave.innerHTML = `<div class="idle"></div>`;
   } else {
     const bars = ensureBars();
-    const color = state === "processing" ? "#f59e0b" : "linear-gradient(180deg,#c084fc,#7c3aed)";
+    const fill = state === "processing" ? "#f59e0b" : t.wave;
     wave.innerHTML = bars.map(b =>
-      `<div class="bar" style="background:${color};animation-duration:${b.dur}s;animation-delay:${b.delay}s;"></div>`
+      `<div class="bar" style="background:${fill};animation-duration:${b.dur}s;animation-delay:${b.delay}s;"></div>`
     ).join("");
   }
 
-  // Bouton d'action
+  // Bouton d'action (le « Démarrer » prend le dégradé du mode ; « Arrêter » reste rouge).
   const slot = $("#action-slot");
   if (state === "idle") {
     const label = ui.mode === "live" ? "Démarrer le live" : ui.mode === "conference" ? "Démarrer la réunion" : "Démarrer la dictée";
-    slot.innerHTML = `<button class="btn-primary" id="rec-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="2" width="5" height="8" rx="2.5"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0"/><line x1="8" y1="12.5" x2="8" y2="14.5"/></svg>${label}</button>`;
+    slot.innerHTML = `<button class="btn-primary" id="rec-btn" style="background:${t.grad};box-shadow:0 6px 20px ${t.glow}"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="2" width="5" height="8" rx="2.5"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0"/><line x1="8" y1="12.5" x2="8" y2="14.5"/></svg>${label}</button>`;
   } else if (state === "processing") {
     slot.innerHTML = `<button class="btn-busy" disabled><span class="spinner sm"></span>Traitement…</button>`;
   } else {
@@ -233,6 +255,7 @@ function applyState(state) {
   ui.stopping = false;            // l'état réel a changé : fin du transitoire « Arrêt… »
   clearTimeout(onRecClick._t);
   renderStatus(state);
+  updateSourceVisibility();       // visible seulement au repos (modes loopback)
   // Rechargement du dashboard quand une transcription vient de se terminer.
   if (state === "idle" && (prev === "processing" || prev === "recording")) {
     loadDashboard();
@@ -256,6 +279,29 @@ async function loadDashboard() {
   renderKeys($("#dash-hotkey"), d.combo);
   $("#sb-model").textContent = "whisper-" + (d.model || "small");
   $("#sb-device").textContent = d.device || "CPU";
+}
+
+// Source audio (sortie système) des modes loopback — équivalent inline des
+// sous-menus du tray. Choix éphémère (par démarrage), transmis à start_live/
+// start_conference côté Python via set_source.
+async function loadSources() {
+  const opts = (await call("list_audio_outputs")) || [];
+  ui.sourceCount = opts.length;
+  const sel = $("#dash-source");
+  sel.innerHTML = opts.map(o =>
+    `<option value="${o.value === null ? "" : o.value}">${escapeHtml(o.label)}</option>`
+  ).join("");
+  sel.value = ui.source == null ? "" : String(ui.source);
+  updateSourceVisibility();
+}
+
+// Le sélecteur n'a de sens qu'au repos, en mode loopback, et s'il y a un choix
+// réel (plus que « Sortie par défaut »). Sinon masqué (cohérent avec le tray).
+function updateSourceVisibility() {
+  const loop = ui.mode === "live" || ui.mode === "conference";
+  const show = loop && ui.state === "idle" && ui.sourceCount > 1;
+  const row = $("#source-row");
+  if (row) row.style.display = show ? "" : "none";
 }
 
 // ───────────────────────────── Configuration ───────────────────────────────
@@ -589,7 +635,12 @@ function bindNav() {
     $$("#mode-switch .seg").forEach(x => x.classList.toggle("active", x === b));
     call("set_mode", ui.mode);
     renderStatus(ui.state); // met à jour le libellé du bouton
+    updateSourceVisibility(); // affiche le sélecteur de source en Live/Conférence
   }));
+  $("#dash-source").addEventListener("change", e => {
+    ui.source = e.target.value === "" ? null : Number(e.target.value);
+    call("set_source", ui.source);
+  });
   $("#copy-last").addEventListener("click", () => {
     const t = $("#last-text").textContent;
     call("copy_text", t);
@@ -606,6 +657,7 @@ function init() {
   bindTitlebar();
   renderStatus("idle");
   loadDashboard();
+  loadSources();
   refreshState();
   setInterval(refreshState, 200);
 }
@@ -615,4 +667,4 @@ function init() {
 // quand le pont devient disponible.
 if (document.readyState !== "loading") init();
 else document.addEventListener("DOMContentLoaded", init);
-window.addEventListener("pywebviewready", () => { loadDashboard(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "historique") loadHistory(); });
+window.addEventListener("pywebviewready", () => { loadDashboard(); loadSources(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "historique") loadHistory(); });

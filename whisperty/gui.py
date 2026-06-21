@@ -79,6 +79,10 @@ class GuiApi:
         self._app = app
         self._window = None       # renseigné par launch_gui
         self._mode = "dictee"     # dictée | live | conference (bouton du dashboard)
+        # Source audio choisie pour les modes loopback (live/conférence) : None = sortie
+        # par défaut, sinon index dans list_speakers(). Éphémère (par démarrage), comme
+        # le choix du sous-menu tray — n'est pas persisté dans config.yaml.
+        self._source = None
         self._maximized = False
 
     # -- contrôles fenêtre -----------------------------------------------------
@@ -133,9 +137,9 @@ class GuiApi:
         try:
             if state is TrayState.IDLE:
                 if self._mode == "live":
-                    self._app.start_live()
+                    self._app.start_live(self._source)
                 elif self._mode == "conference":
-                    self._app.start_conference()
+                    self._app.start_conference(self._source)
                 else:
                     self._app.toggle()
             elif state is TrayState.RECORDING:
@@ -197,6 +201,36 @@ class GuiApi:
         except Exception:  # noqa: BLE001
             logger.exception("Énumération des micros indisponible")
         return opts
+
+    # -- source audio des modes loopback (live/conférence) --------------------
+    def list_audio_outputs(self) -> list:
+        """Sorties système capturables (loopback) pour les modes live/conférence.
+
+        Renvoie [{value, label}] : None = « Sortie par défaut » puis chaque
+        haut-parleur (cf. ``loopback.list_speakers``). Liste réduite au défaut si
+        ``soundcard`` est absent — l'UI masque alors le sélecteur (rien à choisir).
+        """
+        opts = [{"value": None, "label": "Sortie par défaut"}]
+        try:
+            from .loopback import list_speakers
+
+            for d in list_speakers():
+                label = d["name"] + (" (défaut)" if d.get("is_default") else "")
+                opts.append({"value": d["index"], "label": label})
+        except Exception:  # noqa: BLE001
+            logger.exception("Énumération des sorties audio indisponible")
+        return opts
+
+    def set_source(self, value) -> dict:
+        """Mémorise la source loopback choisie (None/"" = défaut, sinon index)."""
+        if value in (None, ""):
+            self._source = None
+        else:
+            try:
+                self._source = int(value)
+            except (TypeError, ValueError):
+                self._source = None
+        return {"ok": True}
 
     def get_config(self) -> dict:
         # CONTRAT : les clés renvoyées ici doivent rester alignées avec celles lues par
