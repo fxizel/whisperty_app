@@ -64,6 +64,10 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - Transitions d'état sérialisées par `WhispertyApp._lock` (RLock). Verrou interne
   `AudioRecorder._op_lock` pour `start()`/`stop()`. **Ordre imposé : `_lock` → `_op_lock`,
   jamais l'inverse** ; le callback PortAudio (`_callback`) ne prend aucun verrou.
+- **Flux live affiché (V2)** : `WhispertyApp._live_lock` protège l'accumulateur du flux
+  live/réunion (`_live_lines` + `_live_rev`). C'est un **verrou feuille** : jamais imbriqué
+  avec `_lock` (les callbacks `on_segment` n'en prennent aucun autre ; `poll()` relâche `_lock`
+  avant de lire `live_rev()`).
 - `_stop_and_process()` relâche `_lock` avant l'arrêt bloquant de PortAudio. À l'inverse,
   `_start_recording()` tient `_lock` pendant `recorder.start()` **à dessein** (évite un flux
   orphelin si un stop concurrent survient pendant l'ouverture du périphérique).
@@ -141,6 +145,22 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   `Rectangle.Empty`, au DÉMARRAGE. Déplacement de la fenêtre : `win_move` (→ `SetWindowPos`, thread-safe) avec
   un décalage calculé en JS (`screenX − clientX`) — NE JAMAIS lire `window.x/.y` (→ `Control.Left/Top` hors
   thread UI = plantage).
+- **Flux live « au fil de l'eau » dans l'UI (V2, live + réunion)** : en mode **Live continu** comme en
+  **Conférence**, la tuile « Dernière transcription » du dashboard devient un **flux en direct** — chaque
+  segment transcrit s'y ajoute immédiatement (titre → « Transcription en direct », zone défilante qui suit
+  le dernier segment). Câblage : `LiveTranscriber`/`ConferenceTranscriber` exposent déjà un callback
+  `on_segment` (thread worker) ; `WhispertyApp` le branche (`_on_live_segment`/`_on_conference_segment`) vers
+  un accumulateur thread-safe (`_live_lock` + `_live_lines` + compteur monotone `_live_rev`). Le live affiche
+  le texte seul ; la réunion affiche la **ligne déjà formatée** (`[MM:SS]` + éventuel locuteur). ⚠️ Respect du
+  modèle **polling, pas de push** : `poll()` ne renvoie que `liveRev` (entier) — le JS ne récupère le texte
+  (`get_live_text` → `{rev, text}`) **que** lorsque `liveRev` change (payload de tick minimal, jamais tout le
+  transcript 5×/s). `_live_lock` est un **verrou feuille** (jamais imbriqué avec `_lock` ; `poll()` relâche
+  `_lock` avant de lire `live_rev()`). ⚠️ **Ordre dans les callbacks de fin** : `_on_live_finished`/
+  `_on_conference_finished` historisent (et copient, en live) **AVANT** de repasser `IDLE` — sinon course :
+  le JS, voyant `IDLE`, recharge la tuile depuis `history.last_text()` qui renverrait la transcription
+  *précédente*. À l'arrêt, la tuile bascule sur ce texte final d'historique (réunion : version triée).
+  `_reset_live_transcript()` (appelé au démarrage de chaque live/réunion) vide le flux et bump `_live_rev`
+  (la tuile repart de « En écoute… »). La doublure `Mock` de `app.js` simule ce flux (aperçu autonome).
 - **Écriture de config (V2, `configio.py`)** : l'écran Configuration enregistre via `update_yaml_file`
   (édition **ligne par ligne** préservant commentaires/ordre) — PAS `yaml.safe_dump` (détruirait les
   commentaires) ni `ruamel` (dépendance évitée). `apply_config_from_gui` mute les dataclasses en place

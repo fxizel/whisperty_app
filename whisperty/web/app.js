@@ -48,18 +48,54 @@ const Mock = (() => {
   }));
 
   // Machine à états factice (anime le visualiseur dans l'aperçu).
-  let state = "idle", timer = null;
+  let state = "idle", timer = null, mode = "dictee";
+
+  // Flux live factice (modes live/conférence) : des segments s'ajoutent au fil de
+  // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
+  let liveRev = 0, liveLines = [], liveTimer = null;
+  const liveSamples = [
+    "Bonjour à tous, merci d'être présents pour ce point d'avancement.",
+    "On commence par un rapide tour des sujets prioritaires de la semaine.",
+    "La transcription locale tient la latence sous les cinq cents millisecondes.",
+    "Question pour l'équipe produit : où en est la roadmap du trimestre ?",
+    "Côté confidentialité, aucune donnée audio ne quitte la machine.",
+    "On valide le passage au modèle medium pour les conférences plus longues.",
+    "Prochain jalon : préparer la démonstration pour mercredi après-midi.",
+  ];
+  function startLiveMock() {
+    liveLines = []; liveRev++;
+    let i = 0;
+    liveTimer = setInterval(() => {
+      liveLines.push(liveSamples[i % liveSamples.length]); i++; liveRev++;
+    }, 2200);
+  }
+  function stopLiveMock() {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  }
 
   return {
-    poll: () => ({ state, level: state === "recording" ? 0.35 + Math.random() * 0.5 : (state === "processing" ? 0.2 : 0) }),
+    poll: () => ({
+      state,
+      level: (state === "recording" || state === "live" || state === "conference")
+        ? 0.35 + Math.random() * 0.5 : (state === "processing" ? 0.2 : 0),
+      liveRev,
+    }),
     get_dashboard: () => ({ lastText, statsWords: stats.words, statsDur: stats.dur, statsTrans: stats.trans, combo: cfg.combo, model: cfg.model, device: cfg.device }),
-    set_mode: () => ({ ok: true }),
+    set_mode: (m) => { if (m) mode = m; return { ok: true }; },
+    get_live_text: () => ({ rev: liveRev, text: liveLines.join("\n") }),
     toggle_record: () => {
-      if (state === "idle") { state = "recording"; }
-      else if (state === "recording") {
+      if (state === "idle") {
+        if (mode === "live") { state = "live"; startLiveMock(); }
+        else if (mode === "conference") { state = "conference"; startLiveMock(); }
+        else { state = "recording"; }
+      } else if (state === "recording") {
         state = "processing";
         clearTimeout(timer);
         timer = setTimeout(() => { state = "idle"; stats.words += 42 + Math.floor(Math.random() * 60); stats.trans += 1; }, 1700);
+      } else if (state === "live" || state === "conference") {
+        stopLiveMock();
+        if (liveLines.length) { lastText = liveLines.join("\n"); stats.trans += 1; }
+        state = "idle";
       } else { state = "idle"; }
       return { ok: true };
     },
@@ -103,6 +139,7 @@ const ui = {
   capturing: false,
   copiedId: null,
   stopping: false,  // arrêt demandé : retour visuel immédiat le temps que le worker finalise
+  liveRev: -1,      // dernière révision du flux live vue (live/conférence) ; -1 = à récupérer
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -268,29 +305,75 @@ function applyState(state) {
   clearTimeout(onRecClick._t);
   renderStatus(state);
   updateSourceVisibility();       // visible seulement au repos (modes loopback)
-  // Rechargement du dashboard quand une transcription vient de se terminer.
+  // Entrée/sortie du flux live (live/conférence) : bascule la tuile « Dernière transcription ».
+  const wasFeed = isLiveFeed(prev), nowFeed = isLiveFeed(state);
+  if (nowFeed && !wasFeed) setLiveTile(true);
+  else if (wasFeed && !nowFeed) { setLiveTile(false); loadDashboard(); }  // texte final via l'historique
+  // Rechargement du dashboard quand une dictée vient de se terminer.
   if (state === "idle" && (prev === "processing" || prev === "recording")) {
     loadDashboard();
   }
 }
 
 async function refreshState() {
-  const { state, level } = await call("poll");
+  const { state, level, liveRev } = await call("poll");
   applyState(state);
   // Modulation discrète de l'amplitude par le niveau réel.
   const amp = Math.max(0.25, Math.min(1, 0.3 + level));
   $("#wave").style.setProperty("--amp", amp.toFixed(2));
+  // Flux live « au fil de l'eau » : met à jour la tuile si de nouveaux segments sont arrivés.
+  pollLiveFeed(state, liveRev);
 }
 
 async function loadDashboard() {
   const d = await call("get_dashboard");
-  $("#last-text").textContent = d.lastText || "Aucune transcription pour le moment.";
+  // En flux live/conférence, la tuile est pilotée par pollLiveFeed : ne pas l'écraser.
+  if (!isLiveFeed(ui.state)) {
+    $("#last-text").textContent = d.lastText || "Aucune transcription pour le moment.";
+  }
   $("#stat-words").textContent = (d.statsWords || 0).toLocaleString("fr-FR");
   $("#stat-dur").textContent = d.statsDur || 0;
   $("#stat-trans").textContent = d.statsTrans || 0;
   renderKeys($("#dash-hotkey"), d.combo);
   $("#sb-model").textContent = "whisper-" + (d.model || "small");
   $("#sb-device").textContent = d.device || "CPU";
+}
+
+// ── Flux live « au fil de l'eau » (modes Live continu / Conférence) ──────────
+// La tuile « Dernière transcription » devient un flux en direct : chaque segment
+// transcrit s'y ajoute, le titre passe à « Transcription en direct » et la zone
+// défile vers le dernier segment. Hors de ces modes, comportement inchangé.
+const LIVE_FEED = ["live", "conference"];
+function isLiveFeed(state) { return LIVE_FEED.includes(state); }
+
+// Bascule la tuile en mode flux direct (on=true) ou la restaure (on=false).
+function setLiveTile(on) {
+  const title = $("#last-title");
+  const el = $("#last-text");
+  if (on) {
+    if (title) title.textContent = "Transcription en direct";
+    el.classList.add("live");
+    el.textContent = "En écoute…";
+    ui.liveRev = -1;   // force la récupération du texte au prochain poll
+  } else {
+    if (title) title.textContent = "Dernière transcription";
+    el.classList.remove("live");
+  }
+}
+
+// Récupère le texte du flux quand de nouveaux segments sont arrivés (rev a changé).
+// Appelé à chaque tick de polling ; ne fait un aller-retour que sur changement réel.
+async function pollLiveFeed(state, liveRev) {
+  if (!isLiveFeed(state)) return;
+  if (liveRev === ui.liveRev) return;            // rien de neuf depuis le dernier fetch
+  ui.liveRev = liveRev;
+  const data = (await call("get_live_text")) || {};
+  if (data.rev != null) ui.liveRev = data.rev;   // évite un re-fetch si rev a avancé entre-temps
+  const el = $("#last-text");
+  if (!isLiveFeed(ui.state)) return;             // le mode a pu changer pendant l'await
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  el.textContent = (data.text || "").trim() || "En écoute…";
+  if (atBottom) el.scrollTop = el.scrollHeight;  // suit le dernier segment (sauf défilement manuel)
 }
 
 // Source audio (sortie système) des modes loopback — équivalent inline des

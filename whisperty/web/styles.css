@@ -452,4 +452,12 @@ input[type=text] {
   margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-2);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* Mode flux direct (Live continu / Conférence) : segments empilés au fil de l'eau,
+   défilement vers le dernier, retours à la ligne préservés (textContent + \n). */
+.last-text.live {
+  display: block; -webkit-line-clamp: none; white-space: pre-wrap;
+  max-height: 132px; overflow-y: auto;
+}
+.last-text.live::-webkit-scrollbar { width: 8px; }
+.last-text.live::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
 .copied { color: var(--green-2); }

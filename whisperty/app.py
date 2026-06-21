@@ -71,13 +71,27 @@ class WhispertyApp:
         self.history = History.from_config(config)
         self.llm = LocalLLM(config.ai)
         self.profiles = ProfileResolver(config)
+        # V2 : flux de transcription « au fil de l'eau » des modes live/réunion, pour
+        # affichage progressif dans la tuile « Dernière transcription » de l'UI fenêtre.
+        # Alimenté par les callbacks on_segment (thread worker) ; lu par GuiApi.poll/
+        # get_live_text (thread du pont). Le compteur _live_rev (monotone) évite de
+        # renvoyer tout le transcript à chaque tick : le JS ne le récupère qu'au changement.
+        self._live_lock = threading.Lock()
+        self._live_lines: list[str] = []
+        self._live_rev = 0
         # V2 : transcription live d'une sortie audio (loopback).
         self.live = LiveTranscriber(
-            config, self.transcriber, on_finished=self._on_live_finished
+            config,
+            self.transcriber,
+            on_finished=self._on_live_finished,
+            on_segment=self._on_live_segment,
         )
         # V2 : mode réunion (micro + sortie système simultanés).
         self.conference = ConferenceTranscriber(
-            config, self.transcriber, on_finished=self._on_conference_finished
+            config,
+            self.transcriber,
+            on_finished=self._on_conference_finished,
+            on_segment=self._on_conference_segment,
         )
         live_devices = list_speakers()  # best-effort (liste vide si soundcard absent)
         self.tray = Tray(
@@ -340,6 +354,40 @@ class WhispertyApp:
             logger.exception("Sélecteur de fichier indisponible")
             return None
 
+    # -- flux live « au fil de l'eau » (live / réunion) ------------------------
+    def _reset_live_transcript(self) -> None:
+        """Vide le flux affiché et invalide le cache JS (le compteur change → re-fetch)."""
+        with self._live_lock:
+            self._live_lines = []
+            self._live_rev += 1
+
+    def _append_live_line(self, display: str) -> None:
+        """Ajoute une ligne au flux affiché (appelé depuis le thread worker)."""
+        display = (display or "").strip()
+        if not display:
+            return
+        with self._live_lock:
+            self._live_lines.append(display)
+            self._live_rev += 1
+
+    def _on_live_segment(self, _stamp: str, text: str) -> None:
+        # En live, on affiche le texte seul (lecture fluide ; l'horodatage va au fichier).
+        self._append_live_line(text)
+
+    def _on_conference_segment(self, line: str, _text: str) -> None:
+        # En réunion, on affiche la ligne déjà formatée ([MM:SS] éventuel locuteur : …).
+        self._append_live_line(line)
+
+    def live_rev(self) -> int:
+        """Compteur monotone du flux live (lu par GuiApi.poll, payload minimal)."""
+        with self._live_lock:
+            return self._live_rev
+
+    def live_transcript(self) -> dict:
+        """Flux live courant : {rev, text}. Récupéré par le JS quand rev a changé."""
+        with self._live_lock:
+            return {"rev": self._live_rev, "text": "\n".join(self._live_lines)}
+
     # -- transcription live d'une sortie audio (V2) ----------------------------
     def start_live(self, device_spec: object = None) -> None:
         """Démarre la transcription live d'une sortie audio (menu tray).
@@ -357,6 +405,8 @@ class WhispertyApp:
                 self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
                 return
             self._set_state(TrayState.LIVE)
+        # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
+        self._reset_live_transcript()
         # Démarrage hors verrou ; en cas d'échec immédiat, on rétablit l'état.
         if not self.live.start(device_spec):
             logger.warning("La transcription live n'a pas pu démarrer.")
@@ -375,21 +425,24 @@ class WhispertyApp:
 
     def _on_live_finished(self, result: dict) -> None:
         """Callback de fin de transcription live (appelé depuis le thread live)."""
-        with self._lock:
-            if self._state is TrayState.LIVE:
-                self._set_state(TrayState.IDLE)
         error = result.get("error")
-        if error:
-            self.tray.notify(f"Transcription live arrêtée : {error}")
-            return
         text = result.get("text") or ""
         count = result.get("segments", 0)
         device = result.get("device")
-        if text:
+        # Historiser/copier AVANT de repasser IDLE : la tuile (pilotée par l'état) bascule
+        # vers le texte d'historique dès qu'IDLE est vu — l'entrée doit déjà exister, sinon
+        # course (last_text() renverrait la transcription précédente).
+        if not error and text:
             self.history.add(
                 text, source="live", app=device, model=self.config.transcription.model
             )
             self.injector.copy_to_clipboard(text)
+        with self._lock:
+            if self._state is TrayState.LIVE:
+                self._set_state(TrayState.IDLE)
+        if error:
+            self.tray.notify(f"Transcription live arrêtée : {error}")
+        elif text:
             self.tray.notify(
                 f"Transcription live arrêtée — {count} segment(s) copiés dans le presse-papiers."
             )
@@ -413,6 +466,8 @@ class WhispertyApp:
                 self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
                 return
             self._set_state(TrayState.CONFERENCE)
+        # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
+        self._reset_live_transcript()
         # Rappel consentement (tout reste local).
         self.tray.notify(
             "Réunion : pensez au consentement des participants. Tout reste local."
@@ -433,23 +488,24 @@ class WhispertyApp:
 
     def _on_conference_finished(self, result: dict) -> None:
         """Callback de fin de réunion (appelé depuis le thread de réunion)."""
-        with self._lock:
-            if self._state is TrayState.CONFERENCE:
-                self._set_state(TrayState.IDLE)
         error = result.get("error")
-        if error:
-            self.tray.notify(f"Réunion arrêtée : {error}")
-            return
         text = result.get("text") or ""
         count = result.get("segments", 0)
         device = result.get("device")
         path = result.get("path")
         sources = ", ".join(result.get("sources", [])) or "aucune"
-        if text:
+        # Historiser AVANT de repasser IDLE (cf. _on_live_finished : évite la course
+        # tuile/last_text()). Le texte final est la version triée (entrelacement).
+        if not error and text:
             self.history.add(
                 text, source="réunion", app=device, model=self.config.transcription.model
             )
-        if path:
+        with self._lock:
+            if self._state is TrayState.CONFERENCE:
+                self._set_state(TrayState.IDLE)
+        if error:
+            self.tray.notify(f"Réunion arrêtée : {error}")
+        elif path:
             self.tray.notify(
                 f"Réunion terminée — {count} segment(s) (sources : {sources}). Transcript : {path}"
             )

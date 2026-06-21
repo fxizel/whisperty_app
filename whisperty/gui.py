@@ -109,7 +109,11 @@ class GuiApi:
 
     # -- état / dashboard ------------------------------------------------------
     def poll(self) -> dict:
-        """État courant + niveau RMS (appelé ~5×/s par le JS pour le visualiseur)."""
+        """État courant + niveau RMS + révision du flux live (appelé ~5×/s par le JS).
+
+        ``liveRev`` : compteur monotone du flux live/réunion. Le JS ne récupère le texte
+        (``get_live_text``) que lorsqu'il change → payload de polling minimal.
+        """
         try:
             with self._app._lock:
                 state = self._app._state.value
@@ -119,7 +123,22 @@ class GuiApi:
             level = float(self._app.recorder.current_level)
         except Exception:  # noqa: BLE001
             level = 0.0
-        return {"state": state, "level": level}
+        try:
+            rev = int(self._app.live_rev())
+        except Exception:  # noqa: BLE001
+            rev = 0
+        return {"state": state, "level": level, "liveRev": rev}
+
+    def get_live_text(self) -> dict:
+        """Flux live courant ({rev, text}) pour la tuile « Dernière transcription ».
+
+        Affichage progressif des modes live/réunion : chaque segment transcrit s'y ajoute
+        au fil de l'eau. Récupéré par le JS quand ``poll().liveRev`` a changé.
+        """
+        try:
+            return self._app.live_transcript()
+        except Exception:  # noqa: BLE001
+            return {"rev": 0, "text": ""}
 
     def set_mode(self, mode: str) -> dict:
         if mode in ("dictee", "live", "conference"):
