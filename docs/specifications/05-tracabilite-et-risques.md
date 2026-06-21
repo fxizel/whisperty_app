@@ -1,0 +1,165 @@
+# 05 — Traçabilité, risques & questions ouvertes
+
+## 1. Matrice Persona → Cas d'utilisation
+
+Indique quels personas portent chaque cas d'utilisation (● = usage central, ○ = usage occasionnel).
+
+| UC \ Persona | P-01 Camille (dev) | P-02 Marc (énergie) | P-03 Sophie (RSSI) | P-04 Thomas (access.) | P-05 Léa (réunions) | P-06 Rémi (admin) |
+|--------------|:---:|:---:|:---:|:---:|:---:|:---:|
+| UC-01 Dicter | ● | ● | ○ | ● | ○ | |
+| UC-02 Déclencher | ● | ○ | | ● | ○ | |
+| UC-03 Arrêt auto | ○ | ○ | | ● | ○ | |
+| UC-04 Dictionnaire | ● | ● | | | ○ | |
+| UC-05 Profils | ● | ○ | | | | |
+| UC-06 IA locale | ● | ○ | ○ | | ○ | |
+| UC-07 Import fichier | | ○ | | | ● | |
+| UC-08 Historique | ○ | ● | ○ | ○ | ● | |
+| UC-09 Live | | ○ | | | ● | |
+| UC-10 Réunion | | ● | ○ | | ● | |
+| UC-11 Assistant | | ○ | | | ● | |
+| UC-12 Configurer | ● | ○ | ○ | ○ | ○ | ● |
+| UC-13 Packaging/autostart | | | ○ | | | ● |
+| UC-14 Modèle initial | ○ | ○ | ○ | ○ | ○ | ● |
+| UC-15 GPU | ○ | | | | | ● |
+
+> P-03 (RSSI) « consomme » surtout les **contraintes** (CO-01…03) plutôt que les UC : elle
+> valide le comportement zéro-réseau, transverse à tous les cas d'utilisation.
+
+## 2. Matrice Cas d'utilisation → Exigences
+
+| UC | Exigences fonctionnelles | Non fonctionnelles & contraintes |
+|----|--------------------------|----------------------------------|
+| UC-01 Dicter | FR-01, FR-02, FR-03, FR-04, FR-05, FR-06, FR-07, FR-16, FR-19 | US-01, US-03, US-04, RE-01, RE-02, RE-05, PE-01, PE-02, PE-05, CO-01, CO-13, BR-01…04 |
+| UC-02 Déclencher | FR-01 | US-01, US-06, RE-05, CO-09, BR-01 |
+| UC-03 Arrêt auto | FR-15 | RE-03, PE-04, US-06 |
+| UC-04 Dictionnaire | FR-07 | US-04, SU-02, BR-03 |
+| UC-05 Profils | FR-08 | CO-10 |
+| UC-06 IA locale | FR-09 | RE-06, CO-01, CO-03, BR-03 |
+| UC-07 Import fichier | FR-10 | RE-02, US-07, CO-07, BR-06 |
+| UC-08 Historique | FR-11 | RE-07, RE-10, SU-03, SU-08 |
+| UC-09 Live | FR-12, FR-16 | RE-08, PE-03, PE-04, US-07, CO-05, CO-06, BR-06 |
+| UC-10 Réunion | FR-13, FR-16, FR-19 | RE-08, RE-09, RE-10, PE-03, CO-04, CO-05, CO-06, CO-16, BR-05, BR-06 |
+| UC-11 Assistant | FR-14, FR-16 | RE-06, RE-08, RE-10, CO-03, CO-16, BR-05, BR-07 |
+| UC-12 Configurer | FR-17 | US-05, SU-01, SU-08 |
+| UC-13 Packaging | FR-17 | SU-04, CO-08, CO-11 |
+| UC-14 Modèle initial | FR-18 | PE-02, CO-01, CO-02 |
+| UC-15 GPU | FR-03 | PE-01, CO-12 |
+
+## 3. Couverture inverse Exigence → Cas d'utilisation
+
+Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou contrainte transverse).
+
+| Exigence | Couverte par |
+|----------|--------------|
+| FR-01 | UC-01, UC-02 |
+| FR-02 | UC-01 |
+| FR-03 | UC-01, UC-15 |
+| FR-04 | UC-01 |
+| FR-05 | UC-01 |
+| FR-06 | UC-01 |
+| FR-07 | UC-01, UC-04 |
+| FR-08 | UC-05 |
+| FR-09 | UC-06 |
+| FR-10 | UC-07 |
+| FR-11 | UC-08 |
+| FR-12 | UC-09 |
+| FR-13 | UC-10 |
+| FR-14 | UC-11 |
+| FR-15 | UC-03 |
+| FR-16 | UC-01, UC-09, UC-10, UC-11 |
+| FR-17 | UC-12, UC-13 |
+| FR-18 | UC-14 |
+| FR-19 | UC-01…11 (exclusivité) |
+| US-01 | UC-02 |
+| US-02 | UC-07…12 (menu tray) |
+| US-03 | UC-01 |
+| US-04 | UC-01, UC-04 |
+| US-05 | UC-12 |
+| US-06 | UC-02, UC-03 |
+| US-07 | UC-07, UC-09, UC-10, UC-11 |
+| RE-01 | UC-01 |
+| RE-02 | UC-01, UC-07 |
+| RE-03 | UC-03 |
+| RE-04 | transverse (concurrence) |
+| RE-05 | UC-02 |
+| RE-06 | UC-06, UC-11 |
+| RE-07 | UC-08 |
+| RE-08 | UC-09, UC-10, UC-11 |
+| RE-09 | UC-10 |
+| RE-10 | UC-08…11 (arrêt propre) |
+| PE-01 | UC-01, UC-15 |
+| PE-02 | UC-01, UC-14 |
+| PE-03 | UC-01, UC-09, UC-10 |
+| PE-04 | UC-03, UC-09 |
+| PE-05 | UC-01 |
+| SU-01 | UC-12 |
+| SU-02 | UC-04 |
+| SU-03 | UC-08 (+ transverse) |
+| SU-04 | UC-13 |
+| SU-05 | transverse (qualité) |
+| SU-06 | transverse (architecture) |
+| SU-07 | transverse (conventions) |
+| SU-08 | UC-08, UC-12 |
+| CO-01 | transverse (cardinal) |
+| CO-02 | UC-14 |
+| CO-03 | UC-06, UC-11 |
+| CO-04 | UC-10 |
+| CO-05 | UC-09, UC-10 |
+| CO-06 | UC-09, UC-10, UC-11 |
+| CO-07 | UC-07 |
+| CO-08 | UC-13 |
+| CO-09 | UC-02 |
+| CO-10 | UC-05 |
+| CO-11 | UC-13 |
+| CO-12 | UC-15 |
+| CO-13 | UC-01 |
+| CO-14 | transverse (packaging/nommage) |
+| CO-15 | transverse (plateforme) |
+| CO-16 | UC-10, UC-11 |
+
+> **Conclusion** : aucune exigence orpheline. Les exigences « transverses » (RE-04, SU-05/06/07,
+> CO-01/14/15) ne se rattachent pas à un UC unique mais conditionnent l'ensemble du système.
+
+## 4. Registre des risques
+
+| # | Risque | Impact | Prob. | Mitigation (existante ou recommandée) |
+|---|--------|:------:|:-----:|---------------------------------------|
+| RSK-01 | **Fuite réseau involontaire** introduite par une dépendance (télémétrie, mise à jour). | Critique | Faible | Garde `local_files_only` + `HF_HUB_OFFLINE` ; revue de dépendances ; audit Wireshark (CO-01). |
+| RSK-02 | **Performance CPU insuffisante** pour `medium` → latence dissuasive. | Élevé | Moyen | Modèle configurable (rétrograder à `small`/`base`), CUDA optionnel (PE-01, UC-15). |
+| RSK-03 | **Loopback indisponible** (`soundcard` absent / pilote WASAPI) → live/réunion KO. | Moyen | Moyen | Démarrage refusé proprement + notification ; documentation d'installation (CO-05). |
+| RSK-04 | **Interblocage** entre verrou d'état et arrêt des modes longs. | Élevé | Faible | Ordre de verrouillage strict + arrêt par callback sans `join()` sous verrou (RE-04, RE-08). |
+| RSK-05 | **Mauvaise cible d'injection** (changement de fenêtre pendant la dictée). | Moyen | Moyen | Profil/cible capturés au démarrage (CO-10) ; sensibiliser l'utilisateur ; modes passifs non injectés (BR-06). |
+| RSK-06 | **Enregistrement de réunion sans consentement** → risque juridique. | Élevé | Moyen | Rappel au démarrage + règle BR-05/CO-16 ; responsabilité utilisateur documentée. |
+| RSK-07 | **Dépendance à un LLM local non installé** pour IA/assistant. | Faible | Élevé | Fonctions opt-in, refus explicite, dégradation gracieuse (texte brut) (RE-06, BR-07). |
+| RSK-08 | **Modèle non pré-téléchargé** au premier lancement hors-ligne. | Moyen | Moyen | Procédure dédiée (UC-14) ; message d'erreur explicite ; `local_files_only` documenté. |
+| RSK-09 | **Corruption d'injection** des accents en mode `type` (frappe). | Faible | Faible | Collage par défaut (BR-04) ; `type` réservé au repli. |
+| RSK-10 | **Perte du transcript de réunion** si arrêt brutal. | Moyen | Faible | Écriture au fil de l'eau (live) + archivage avant fermeture de base (RE-10). |
+
+## 5. Questions ouvertes / à valider
+
+| # | Question | Pour qui |
+|---|----------|----------|
+| Q-01 | Faut-il chiffrer la base d'historique SQLite (`whisperty.db`) au repos ? Aujourd'hui en clair sur le poste. | P-03 (RSSI) |
+| Q-02 | Faut-il une purge/expiration **temporelle** de l'historique (RGPD) en plus de la limite par nombre ? | P-03 |
+| Q-03 | Le mode réunion doit-il afficher une **bannière de consentement** plus formelle (case à cocher) plutôt qu'une simple notification ? | P-02, P-05 |
+| Q-04 | Faut-il une **interface de configuration** (au-delà de l'édition YAML) pour les personas moins techniques (P-04) ? | P-04, P-06 |
+| Q-05 | Souhaite-t-on une **rétroaction sonore/visuelle** au déclenchement (bip, overlay) en plus de l'icône tray ? | P-04 |
+| Q-06 | La diarisation par modèle (locuteurs individuels) sera-t-elle proposée un jour en **option hors-ligne désactivée par défaut** ? | P-05, P-03 |
+| Q-07 | Doit-on cibler explicitement des **objectifs de latence chiffrés** (ex. < N s pour une phrase) par profil matériel ? | P-01, P-06 |
+| Q-08 | Faut-il un mécanisme de **mise à jour** de l'application compatible zéro-réseau (paquet hors-ligne signé) ? | P-06, P-03 |
+
+## 6. Statut de couverture FURPS
+
+| Catégorie | Nb exigences | Couverture personas |
+|-----------|:------------:|---------------------|
+| Functionality (FR) | 19 | P-01 → P-06 |
+| Usability (US) | 7 | P-01, P-04 (priorité), tous |
+| Reliability (RE) | 10 | P-04, P-02 (priorité), tous |
+| Performance (PE) | 5 | P-01, P-05, P-06 |
+| Supportability (SU) | 8 | P-06 (priorité), mainteneurs |
+| Contraintes (CO) | 16 | P-03 (priorité), tous |
+| Règles de gestion (BR) | 7 | transverse |
+
+---
+
+*Fin du dossier de spécifications. Voir l'[index](README.md) pour la navigation.*
