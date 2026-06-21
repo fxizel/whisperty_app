@@ -322,6 +322,17 @@ input[type=text] {
   font-size: 11px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--dim);
 }
 
+/* Explication du mode (sous le sélecteur) : barre d'accent à la couleur du mode. */
+.mode-desc {
+  display: flex; align-items: center; gap: 10px;
+  margin: -6px 2px 0; padding: 0;
+  font-size: 12px; line-height: 1.45; color: var(--muted);
+}
+.mode-desc .accent {
+  flex: 0 0 auto; align-self: stretch; width: 3px; min-height: 18px;
+  border-radius: 2px; background: var(--violet);
+}
+
 /* Carte visualiseur / statut */
 .status-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 16px;

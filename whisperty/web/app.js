@@ -175,6 +175,18 @@ const MODE_THEME = {
 };
 function modeTheme() { return MODE_THEME[ui.mode] || MODE_THEME.dictee; }
 
+// Courte explication de chaque mode (affichée sous le sélecteur du dashboard).
+const MODE_INFO = {
+  dictee:     "Dictée à la demande via le raccourci : vous parlez, le texte est inséré dans l'application active.",
+  live:       "Transcription en continu d'une sortie audio (vidéo, appel…) en temps réel, sans injection.",
+  conference: "Réunion : micro et sortie système capturés ensemble, transcrits par locuteur puis exportés (.txt/.md).",
+};
+function renderModeDesc() {
+  const el = $("#mode-desc");
+  if (!el) return;
+  el.innerHTML = `<span class="accent" style="background:${modeTheme().accent}"></span><span>${MODE_INFO[ui.mode] || ""}</span>`;
+}
+
 // États « en cours » (capture active) et leurs libellés.
 const RUNNING = ["recording", "live", "conference", "meeting"];
 const RUN_LABEL = {
@@ -644,6 +656,7 @@ function bindNav() {
     $$("#mode-switch .seg").forEach(x => x.classList.toggle("active", x === b));
     call("set_mode", ui.mode);
     renderStatus(ui.state); // met à jour le libellé du bouton
+    renderModeDesc();         // met à jour l'explication du mode
     updateSourceVisibility(); // affiche le sélecteur de source en Live/Conférence
   }));
   $("#dash-source").addEventListener("change", e => {
@@ -665,6 +678,7 @@ function init() {
   bindHistory();
   bindTitlebar();
   renderStatus("idle");
+  renderModeDesc();
   loadDashboard();
   loadSources();
   refreshState();
