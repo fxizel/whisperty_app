@@ -13,10 +13,15 @@ Appuyez sur un raccourci, parlez, relâchez : votre voix est transcrite **sur vo
 puis insérée directement dans l'application active — VS Code, Outlook, Teams, navigateur,
 n'importe où. **Aucune donnée audio ni texte ne quitte jamais votre ordinateur.**
 
-```
-  Ctrl+Alt+Espace        🎙️ micro 16 kHz       🧠 Whisper local       📖 dictionnaire       ⌨️ collage
- ───────────────►  capture  ───────────►  faster-whisper  ──────►  + corrections  ──────►  app active
-     (raccourci)          (sounddevice)        (CPU / CUDA)         (hotwords)         (Ctrl+V robuste FR)
+```mermaid
+flowchart LR
+    A["⌨️ Ctrl+Alt+Espace\n(raccourci)"]
+    B["🎙️ Capture\nsounddevice · 16 kHz"]
+    C["🧠 faster-whisper\nCPU / CUDA"]
+    D["📖 Dictionnaire\n+ corrections hotwords"]
+    E["✍️ App active\nCtrl+V robuste FR"]
+
+    A --> B --> C --> D --> E
 ```
 
 ---
