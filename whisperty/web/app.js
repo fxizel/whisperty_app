@@ -228,10 +228,15 @@ function renderStatus(state) {
 
 function applyState(state) {
   if (state === ui.state) return;
+  const prev = ui.state;
   ui.state = state;
   ui.stopping = false;            // l'état réel a changé : fin du transitoire « Arrêt… »
   clearTimeout(onRecClick._t);
   renderStatus(state);
+  // Rechargement du dashboard quand une transcription vient de se terminer.
+  if (state === "idle" && (prev === "processing" || prev === "recording")) {
+    loadDashboard();
+  }
 }
 
 async function refreshState() {
