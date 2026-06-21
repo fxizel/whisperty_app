@@ -74,6 +74,17 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **Live (V2)** : `stop_live()` ne tient PAS `_lock` et ne joint PAS le thread live ; c'est
   `LiveTranscriber._finish` → `_on_live_finished` (qui reprend `_lock`) qui repasse à IDLE.
   Tenir le verrou pendant un `join()` provoquerait un interblocage avec ce callback.
+- **Live — capture ≠ transcription (V2)** : dans `live.py`, le thread de capture lit le
+  loopback en **continu** (`record_fn` + segmentation, triviale) et empile les segments dans une
+  `queue.Queue` ; un **thread worker** (`_transcribe_loop`) les transcrit en parallèle. NE JAMAIS
+  transcrire dans le thread de capture : le tampon interne WASAPI de `soundcard` est borné, et toute
+  pause (le temps de transcrire un segment, plusieurs s en CPU) le ferait déborder → **perte d'audio**
+  pendant le traitement. Arrêt : la sentinelle `None` est mise en file APRÈS le dernier segment ;
+  `_consume` joint le worker avant de rendre la main (donc avant `_close_transcript`/`_finish`), si
+  bien que `_segments`/`_file` ne sont touchés que par le worker (lus par `_finish` après le join).
+  La file est non bornée (latence en cas de retard, jamais de coupure). `meeting.py` hérite de ce
+  correctif (il s'appuie sur `LiveTranscriber`). NB : `conference.py` n'a jamais eu ce défaut — ses
+  sources capturent dans des threads séparés vers des tampons mémoire non bornés (`_StreamBuffer`).
 - **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
   l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
   suspect, sans bloquer la capture loopback.

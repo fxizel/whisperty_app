@@ -6,15 +6,20 @@ chaque segment avec faster-whisper et écrit le résultat au fil de l'eau dans u
 fichier ``transcriptions/live_<horodatage>.txt``. Pensé pour suivre une confcall
 (Teams, Meet…) sans importer de fichier.
 
-Concurrence : la capture + transcription tournent dans un thread dédié, arrêté
-par un ``threading.Event``. Le segmenteur (:class:`_Segmenter`) est une logique
-pure (testable hors-ligne, sans audio ni modèle).
+Concurrence : DEUX threads. Un thread de **capture** lit le périphérique sans
+interruption (segmentation incluse, triviale) et empile les segments dans une file ;
+un thread **worker** les transcrit en parallèle. La transcription (lente) ne suspend
+JAMAIS la capture — sinon le tampon WASAPI borné de ``soundcard`` déborderait et des
+morceaux d'audio seraient perdus pendant le traitement. Arrêt par ``threading.Event``.
+Le segmenteur (:class:`_Segmenter`) est une logique pure (testable hors-ligne, sans
+audio ni modèle).
 
 Confidentialité : tout est local (capture loopback + Whisper local). Aucun réseau.
 """
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -172,24 +177,57 @@ class LiveTranscriber:
             self._finish(device_name, path)
 
     def _consume(self, record_fn: Callable[[int], np.ndarray]) -> None:
-        """Boucle de capture : segmente et transcrit jusqu'à l'arrêt demandé."""
+        """Capture en continu (CE thread) ET transcrit (thread worker) sans jamais
+        suspendre la lecture du périphérique.
+
+        ⚠️ Le tampon interne du loopback WASAPI (``soundcard``) est borné : si l'on
+        cesse d'appeler ``record_fn`` — par exemple le temps de transcrire un segment
+        (plusieurs secondes en CPU) — il déborde et des morceaux d'audio sont perdus.
+        On lit donc le périphérique sans interruption ici (la segmentation est triviale)
+        et on délègue la transcription, lente, à un thread worker via une file. En cas de
+        retard, la latence augmente ; il n'y a jamais de perte. La file est non bornée :
+        sur une machine où la transcription suit le temps réel (cas normal) elle reste
+        quasi vide ; un dépassement durable se traduit par de la latence, pas une coupure.
+        """
         segmenter = _Segmenter(
             SAMPLE_RATE, self.cfg.vad_threshold, self.cfg.silence_duration, self.cfg.max_segment
         )
         block_frames = max(1, int(SAMPLE_RATE * self.cfg.block_duration))
-        while not self._stop.is_set():
-            try:
-                block = record_fn(block_frames)
-            except Exception:  # noqa: BLE001 — périphérique retiré, etc.
-                logger.exception("Capture loopback interrompue")
+        seg_queue: "queue.Queue[Optional[np.ndarray]]" = queue.Queue()
+        worker = threading.Thread(
+            target=self._transcribe_loop, args=(seg_queue,), daemon=True
+        )
+        worker.start()
+        try:
+            while not self._stop.is_set():
+                try:
+                    block = record_fn(block_frames)
+                except Exception:  # noqa: BLE001 — périphérique retiré, etc.
+                    logger.exception("Capture loopback interrompue")
+                    break
+                completed = segmenter.push(block)
+                if completed is not None:
+                    seg_queue.put(completed)
+            # Vide le segment en cours à l'arrêt (mis en file avant la sentinelle :
+            # il sera bien transcrit par le worker avant l'arrêt de ce dernier).
+            final = segmenter.flush_final()
+            if final is not None:
+                seg_queue.put(final)
+        finally:
+            seg_queue.put(None)  # sentinelle : termine la boucle du worker
+            worker.join()        # attend la transcription des segments déjà capturés
+
+    def _transcribe_loop(self, seg_queue: "queue.Queue") -> None:
+        """Thread worker : transcrit les segments capturés sans bloquer la capture.
+
+        S'arrête à la réception de la sentinelle ``None`` (poussée à l'arrêt, une fois
+        le dernier segment mis en file). ``_handle_segment`` absorbe les erreurs : un
+        segment fautif n'interrompt pas la boucle."""
+        while True:
+            audio = seg_queue.get()
+            if audio is None:
                 break
-            completed = segmenter.push(block)
-            if completed is not None:
-                self._handle_segment(completed)
-        # Vide le segment en cours à l'arrêt.
-        final = segmenter.flush_final()
-        if final is not None:
-            self._handle_segment(final)
+            self._handle_segment(audio)
 
     def _handle_segment(self, audio: np.ndarray) -> None:
         # En live, on n'applique PAS le raffinage LLM (self.llm.refine) utilisé en dictée :
