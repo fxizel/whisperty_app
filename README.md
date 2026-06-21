@@ -13,6 +13,12 @@ Appuyez sur un raccourci, parlez, relâchez : votre voix est transcrite **sur vo
 puis insérée directement dans l'application active — VS Code, Outlook, Teams, navigateur,
 n'importe où. **Aucune donnée audio ni texte ne quitte jamais votre ordinateur.**
 
+<p align="center">
+  <img src="docs/images/screenshot-dashboard.png" alt="Interface de Whisperty — tableau de bord (Edge WebView2)" width="760">
+  <br>
+  <sub><em>Le tableau de bord : sélecteur de mode, statut temps réel, dernière transcription et statistiques du jour — 100 % local.</em></sub>
+</p>
+
 ```mermaid
 flowchart LR
     A["⌨️ Ctrl+Alt+Espace\n(raccourci)"]
