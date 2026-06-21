@@ -267,27 +267,40 @@ python tests/test_logic.py
 Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Windows et Linux
 (Python 3.10 → 3.12), vérifie un **seuil de couverture de 80 %** et passe `ruff` sur le code.
 
-## Packaging & démarrage automatique
+## Déploiement (installeur Windows)
 
-Construire un exécutable autonome :
+Produire un **installeur autonome** (`Whisperty-Setup-<version>.exe`) déployable sur d'autres
+PC Windows 10/11 64 bits, **sans Python ni dépendances** sur la machine cible :
 
 ```powershell
-pip install pyinstaller
-pyinstaller whisperty.spec    # produit dist\whisperty.exe (onefile)
+.\scripts\build.ps1            # 1) dist\whisperty\ : exe (onedir) + modèle Whisper bundlé
+.\scripts\make_installer.ps1   # 2) dist\installer\Whisperty-Setup-<version>.exe (Inno Setup)
 ```
 
-> ⚠️ `config.yaml` et `dictionary.txt` ne sont **pas** embarqués dans l'exe (volontaire : ils
-> restent éditables). Copiez-les **à côté de `dist\whisperty.exe`**, sinon l'app tourne sur ses
-> réglages par défaut. Le modèle Whisper doit aussi être déjà en cache (cf. *Démarrage rapide*).
->
-> Les **assets de l'interface** (`whisperty/web/`), eux, **doivent** être embarqués
-> (`--add-data "whisperty/web;whisperty/web"` dans le `.spec`) : `gui.web_dir()` les résout en
-> build figé via `sys._MEIPASS`.
+- **`build.ps1`** assemble `whisperty.exe` (mode *onedir* : démarrage rapide) avec toutes ses
+  dépendances natives, les assets de l'interface (`whisperty/web/`), `config.yaml`/`dictionary.txt`
+  éditables, et **bundle le modèle Whisper** dans `models\` → fonctionnement **100 % hors-ligne**
+  sur la cible. Variantes : `-Model small` (installeur plus léger) · `-NoModel` (modèle téléchargé
+  au 1er lancement).
+- **`make_installer.ps1`** compile `installer\whisperty.iss` (nécessite Inno Setup :
+  `winget install --id JRSoftware.InnoSetup -e`).
+- L'installeur s'installe **par utilisateur** (`%LocalAppData%\Programs\Whisperty`, sans droits
+  admin), crée les raccourcis, propose le **démarrage avec Windows**, et préserve config/historique
+  lors d'une mise à jour.
 
-Lancer Whisperty au démarrage de Windows (par utilisateur, sans droits admin) :
+> Procédure détaillée, options et prérequis machine cible : **[`installer/README.md`](installer/README.md)**.
+
+> ⚠️ `config.yaml`/`dictionary.txt` restent **à côté de l'exe** (éditables) ; les assets
+> `whisperty/web/` sont **embarqués** dans le bundle (`gui.web_dir()` les résout via `sys._MEIPASS`).
+> Le point d'entrée figé est `whisperty_launcher.py` (imports absolus ; `__main__.py` garde ses
+> imports relatifs pour `python -m whisperty`).
+
+### Démarrage automatique (build de dev, sans installeur)
+
+Pour un exe construit manuellement (hors installeur), activer le lancement avec Windows :
 
 ```powershell
-.\scripts\install_autostart.ps1     # activer
+.\scripts\install_autostart.ps1     # activer  (cible dist\whisperty\whisperty.exe)
 .\scripts\uninstall_autostart.ps1   # désactiver
 ```
 

@@ -209,13 +209,22 @@ def _install_gui_stubs() -> None:
     if "PIL" not in sys.modules:
         PIL = types.ModuleType("PIL")
         image = types.ModuleType("PIL.Image")
-        image.new = lambda *a, **k: object()
         draw = types.ModuleType("PIL.ImageDraw")
 
-        class _Draw:
-            def ellipse(self, *a, **k):
-                pass
+        class _Img:
+            # Image factice permissive : toute méthode (paste/resize/alpha_composite…)
+            # est un no-op renvoyant un _Img, pour que tray._make_image s'exécute sans
+            # Pillow réel (dessin du logo non vérifié ici — c'est de la logique pure).
+            def __getattr__(self, name):
+                return lambda *a, **k: self
 
+        class _Draw:
+            # Toute primitive de dessin (ellipse, rounded_rectangle, line…) est ignorée.
+            def __getattr__(self, name):
+                return lambda *a, **k: None
+
+        image.new = lambda *a, **k: _Img()
+        image.LANCZOS = image.BILINEAR = 1  # constantes de rééchantillonnage (valeur ignorée)
         draw.Draw = lambda *a, **k: _Draw()
         PIL.Image, PIL.ImageDraw = image, draw
         sys.modules["PIL"] = PIL

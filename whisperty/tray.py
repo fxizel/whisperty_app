@@ -39,14 +39,42 @@ _TITLES = {
 }
 
 
+# Onde sonore simplifiée (3 barres) — variante 16 px de la maquette, lisible à la
+# taille du tray. (x gauche, hauteur) en coordonnées viewBox 100 ; largeur 9, rayon 4.5.
+_TRAY_BARS = [(34, 52), (46, 72), (58, 52)]
+_TRAY_SS = 4  # suréchantillonnage anti-crénelage
+
+
 def _make_image(color: tuple[int, int, int]):
-    """Génère une pastille ronde de la couleur donnée (64×64, fond transparent)."""
+    """Génère l'icône de marque (64×64) : squircle de la couleur d'état + onde blanche.
+
+    Reprend le logo Whisperty (onde sonore dans un squircle) en teintant le fond par
+    la couleur de l'état — la marque reste reconnaissable tout en signalant l'état.
+    """
     from PIL import Image, ImageDraw
 
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((8, 8, 56, 56), fill=color)
-    return image
+    px = 64
+    s = px * _TRAY_SS
+    sc = s / 100.0  # échelle viewBox(100) → pixels
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+
+    # Squircle plein de la couleur d'état.
+    margin = 2 * sc
+    mask = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (margin, margin, s - 1 - margin, s - 1 - margin), radius=int(26 * sc), fill=255
+    )
+    img.paste(Image.new("RGBA", (s, s), color + (255,)), (0, 0), mask)
+
+    # Onde sonore blanche.
+    draw = ImageDraw.Draw(img)
+    for x, h in _TRAY_BARS:
+        top, bottom = (50 - h / 2) * sc, (50 + h / 2) * sc
+        draw.rounded_rectangle(
+            (x * sc, top, (x + 9) * sc, bottom), radius=4.5 * sc, fill=(255, 255, 255, 255)
+        )
+
+    return img.resize((px, px), Image.LANCZOS)
 
 
 class Tray:

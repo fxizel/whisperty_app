@@ -4,7 +4,8 @@
 #   .\scripts\install_autostart.ps1 -ExePath "C:\chemin\whisperty.exe"
 
 param(
-    [string]$ExePath = (Join-Path $PSScriptRoot "..\dist\whisperty.exe")
+    # Layout onedir (cf. whisperty.spec / scripts\build.ps1) : dist\whisperty\whisperty.exe.
+    [string]$ExePath = (Join-Path $PSScriptRoot "..\dist\whisperty\whisperty.exe")
 )
 
 # Compatible Windows PowerShell 5.1 (pas d'opérateur ?. qui exige PowerShell 7).

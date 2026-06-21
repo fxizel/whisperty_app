@@ -30,7 +30,11 @@ logs/
 *.log
 dist/
 build/
+build_log.txt
+installer_log.txt
+# Specs PyInstaller auto-générés ignorés, SAUF le .spec de déploiement (versionné).
 *.spec
+!whisperty.spec
 
 # Données locales (V2)
 *.sqlite

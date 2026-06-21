@@ -153,10 +153,26 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **ffmpeg** : non requis (PyAV est embarqué par faster-whisper) — ne pas l'ajouter en dépendance.
 - **Nommage** : module `injector` et non `typer` (la lib PyPI `typer` est tirée transitivement
   par huggingface-hub — un module `typer.py` la masquerait).
-- **Packaging** : `config.yaml`/`dictionary.txt` ne sont PAS embarqués dans l'exe (éditables) ;
-  ils doivent être déposés à côté de `whisperty.exe`. `upx=False` (UPX corrompt les DLL natives).
-  Les **assets `whisperty/web/`** (UI), eux, DOIVENT être embarqués (`--add-data "whisperty/web;whisperty/web"`) :
-  `gui.web_dir()` résout le dossier en source comme en build figé (`sys._MEIPASS`).
+- **Packaging (build figé)** : PyInstaller en **onedir** (`whisperty.spec` → `dist\whisperty\` ;
+  démarrage rapide, c'est la structure recopiée par l'installeur). Point d'entrée = `whisperty_launcher.py`
+  (imports **absolus**) et NON `whisperty/__main__.py` : PyInstaller exécute l'entrée comme top-level
+  `__main__` sans package parent → les imports relatifs de `__main__.py` lèveraient `ImportError`
+  (`__main__.py` reste en relatif pour `python -m whisperty`). `config.yaml`/`dictionary.txt` ne sont PAS
+  embarqués (éditables, déposés À CÔTÉ de l'exe = `base_dir`) ; les **assets `whisperty/web/` DOIVENT** l'être
+  (`gui.web_dir()` les résout via `sys._MEIPASS`). `upx=False` (UPX corrompt les DLL natives). `collect_all`
+  couvre faster_whisper/ctranslate2/soxr/sounddevice/**soundcard**/pystray/pynput/**webview+pythonnet+clr_loader**
+  (pile WebView2/.NET) ; sans cette pile, repli tray seul.
+- **Modèle en déploiement** : `build.ps1` **bundle** par défaut le modèle dans `dist\whisperty\models\` et
+  patche `config.yaml` → `model: models/faster-whisper-<taille>` + `local_files_only: true` (zéro réseau sur
+  la cible). `transcriber._resolve_model_arg()` résout un modèle « chemin » en **absolu** via `base_dir`
+  (le CWD n'est pas fiable au démarrage auto / figé) ; un nom de taille reste passé tel quel. Variante
+  `build.ps1 -NoModel` → `local_files_only: false` (le modèle, et la vérif de révision HF, passent par le
+  réseau au 1er usage) — d'où le bundling comme défaut conforme à la contrainte cardinale.
+- **Installeur (`installer/whisperty.iss`, Inno Setup)** : installation **par utilisateur** dans
+  `%LocalAppData%\Programs\Whisperty` (sans admin) — INDISPENSABLE car l'app écrit `config.yaml` (édité via
+  l'UI), `whisperty.db`, `logs\`, `transcriptions\` À CÔTÉ de l'exe (échouerait sous `Program Files`).
+  Autostart = clé `HKCU\…\Run` (cohérent avec `scripts\install_autostart.ps1`). `config.yaml`/`dictionary.txt`
+  posés en `onlyifdoesntexist` (MAJ préserve les réglages). WebView2 vérifié, non bloquant.
 
 ## Conventions
 

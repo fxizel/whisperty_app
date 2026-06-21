@@ -38,10 +38,15 @@ class Transcriber:
         cfg: TranscriptionConfig,
         hotwords: Optional[list[str]] = None,
         replacements: Optional[dict[str, str]] = None,
+        base_dir: Optional[Path] = None,
     ) -> None:
         self.cfg = cfg
         self._hotwords = hotwords or []
         self._replacements = replacements or {}
+        # Dossier de référence (= dossier de config.yaml / de l'exe figé) pour résoudre
+        # un modèle bundlé en chemin relatif (cf. _resolve_model_arg). None = pas de
+        # résolution (le nom de taille « medium » est passé tel quel).
+        self._base_dir = Path(base_dir) if base_dir is not None else None
         self._model = None  # chargement paresseux
 
     @classmethod
@@ -51,7 +56,25 @@ class Transcriber:
         replacements: dict[str, str] = {}
         if config.dictionary.enabled:
             hotwords, replacements = load_dictionary(config.resolve(config.dictionary.path))
-        return cls(config.transcription, hotwords, replacements)
+        return cls(config.transcription, hotwords, replacements, base_dir=config.base_dir)
+
+    def _resolve_model_arg(self) -> str:
+        """Argument ``model`` effectif passé à ``WhisperModel``.
+
+        Un nom de taille (``base``/``small``/``medium``/``large-v3``) est résolu par
+        faster-whisper dans le cache Hugging Face — on le laisse tel quel. En revanche,
+        un **modèle bundlé** (chemin contenant un séparateur, p. ex. ``models/faster-
+        whisper-medium``) est résolu en **absolu** par rapport au dossier de config / de
+        l'exe figé : le CWD n'est pas fiable au démarrage automatique ni en build figé,
+        et faster-whisper interpréterait sinon le chemin relatif depuis le CWD.
+        """
+        model = self.cfg.model
+        looks_like_path = isinstance(model, str) and ("/" in model or "\\" in model)
+        if looks_like_path and self._base_dir is not None:
+            candidate = self._base_dir / model
+            if candidate.exists():
+                return str(candidate)
+        return model
 
     @property
     def is_loaded(self) -> bool:
@@ -74,20 +97,21 @@ class Transcriber:
                 "faster-whisper n'est pas installé : pip install faster-whisper"
             ) from exc
 
+        model_arg = self._resolve_model_arg()
         logger.info(
             "Chargement du modèle Whisper '%s' (%s / %s)…",
-            self.cfg.model, self.cfg.device, self.cfg.compute_type,
+            model_arg, self.cfg.device, self.cfg.compute_type,
         )
         try:
             self._model = WhisperModel(
-                self.cfg.model,
+                model_arg,
                 device=self.cfg.device,
                 compute_type=self.cfg.compute_type,
                 local_files_only=self.cfg.local_files_only,
             )
         except Exception as exc:  # noqa: BLE001 — on reformule en erreur claire
             raise ModelNotAvailableError(
-                f"Impossible de charger le modèle '{self.cfg.model}'. "
+                f"Impossible de charger le modèle '{model_arg}'. "
                 "Causes possibles : modèle non téléchargé en mode hors-ligne "
                 "(local_files_only=true), device CUDA indisponible, ou "
                 f"compute_type incompatible. Détail : {exc}"
