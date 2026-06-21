@@ -347,17 +347,23 @@ const LIVE_FEED = ["live", "conference"];
 function isLiveFeed(state) { return LIVE_FEED.includes(state); }
 
 // Bascule la tuile en mode flux direct (on=true) ou la restaure (on=false).
+// En flux direct, la classe live-feed sur la section dashboard étend la carte de
+// transcription à toute la hauteur disponible et masque les stats du jour, afin
+// d'afficher l'ensemble du texte (cf. styles.css).
 function setLiveTile(on) {
   const title = $("#last-title");
   const el = $("#last-text");
+  const screen = $("#screen-dashboard");
   if (on) {
     if (title) title.textContent = "Transcription en direct";
     el.classList.add("live");
+    if (screen) screen.classList.add("live-feed");
     el.textContent = "En écoute…";
     ui.liveRev = -1;   // force la récupération du texte au prochain poll
   } else {
     if (title) title.textContent = "Dernière transcription";
     el.classList.remove("live");
+    if (screen) screen.classList.remove("live-feed");
   }
 }
 

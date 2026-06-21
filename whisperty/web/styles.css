@@ -453,10 +453,17 @@ input[type=text] {
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 /* Mode flux direct (Live continu / Conférence) : segments empilés au fil de l'eau,
-   défilement vers le dernier, retours à la ligne préservés (textContent + \n). */
+   défilement vers le dernier, retours à la ligne préservés (textContent + \n).
+   La carte de transcription occupe alors TOUTE la hauteur restante du dashboard
+   (au lieu d'un encart fixe de 132 px peu pratique en continu) afin d'afficher
+   l'ensemble du texte, comme le détail d'un élément de l'Historique. Les statistiques
+   « du jour » (centrées sur la dictée) sont masquées le temps du live pour dégager
+   l'espace de lecture ; elles réapparaissent à l'arrêt. */
+#screen-dashboard.live-feed .card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#screen-dashboard.live-feed .stats { display: none; }
 .last-text.live {
   display: block; -webkit-line-clamp: none; white-space: pre-wrap;
-  max-height: 132px; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
 .last-text.live::-webkit-scrollbar { width: 8px; }
 .last-text.live::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
