@@ -64,7 +64,7 @@ C'est la contrainte cardinale du projet : **aucune donnée ne sort de la machine
 - 🧠 Transcription Whisper locale, **modèle configurable** (base / small / medium / large-v3), CPU ou CUDA.
 - ⌨️ **Injection system-wide** dans l'app active (collage Ctrl+V robuste, ou frappe en repli).
 - 📖 **Dictionnaire personnalisé** : termes métier favorisés + corrections automatiques.
-- 🔔 **Icône de notification** avec statut (gris = prêt, rouge = enregistrement, orange = transcription, bleu = capture live).
+- 🔔 **Icône de notification** avec statut (gris = prêt, rouge = enregistrement, orange = transcription, bleu = capture live, vert = réunion, violet = assistant de réunion).
 
 **Au-delà de la dictée**
 - 📜 **Historique local** (SQLite) — purge automatique, « Copier la dernière transcription » depuis le tray.

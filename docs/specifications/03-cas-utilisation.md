@@ -100,9 +100,17 @@ journalisé), jamais mis en file.
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
 | UC-15 | Activer l'accélération GPU NVIDIA | Administrateur | C | P-06 |
 
+> Le persona **P-03 (RSSI/DPO)** n'apparaît pas en colonne « Personas » : il agit comme
+> **acteur-contrainte** (validation du zéro-réseau, `CO-01…03`) plutôt qu'en utilisateur direct.
+> Son rattachement transverse aux UC figure dans la matrice [`05` §1](05-tracabilite-et-risques.md).
+
 ---
 
 ## 5. Fiches détaillées
+
+> Dans les fiches ci-dessous, **« Exigences liées »** est une liste *indicative* des exigences
+> les plus saillantes du cas. La **traçabilité complète et bidirectionnelle** UC ↔ exigences
+> fait foi dans [`05` §2–§3](05-tracabilite-et-risques.md).
 
 ### UC-01 — Dicter du texte dans l'application active
 
@@ -333,8 +341,8 @@ en une transcription continue sans étiquette de locuteur.
 1. Tray → « Assistant de réunion (réponses auto) » → choix de la sortie ; état `MEETING` (icône **violette**).
 2. Le système écoute la sortie audio, transcrit en continu, et détecte les **questions** adressées à l'utilisateur (`meeting.user_name`).
 3. Sur question détectée, un worker interroge le LLM local avec les `context_segments` récents et le `user_context`.
-4. La réponse est **copiée dans le presse-papiers** (`auto_inject: false`, recommandé) ou **injectée** dans l'app active (`auto_inject: true`).
-5. À l'arrêt, le transcript complet est copié/archivé (source = `réunion-transcript`).
+4. La réponse est **copiée dans le presse-papiers** (`auto_inject: false`, recommandé) ou **injectée** dans l'app active (`auto_inject: true`). Chaque couple question/réponse est aussi **archivé** pendant la session (source = `réunion`).
+5. À l'arrêt, le **transcript complet** est copié et archivé (source = `réunion-transcript`).
 
 **Préconditions (bloquantes)** : `ai.enabled: true` **et** `meeting.user_name` renseigné — sinon refus avec notification explicite.
 **Exigences liées** : FR-14, CO-03, RE-06, BR-05.
@@ -370,7 +378,7 @@ en une transcription continue sans étiquette de locuteur.
 2. Copier `config.yaml` et `dictionary.txt` **à côté** de l'exe (non embarqués, éditables).
 3. `scripts\install_autostart.ps1` (par utilisateur, sans droits admin) ; désinstallation par le script inverse.
 
-**Exigences liées** : SU-04, CO-08 (config non embarqué), CO-11 (`upx=False`).
+**Exigences liées** : FR-17, SU-04, CO-08 (config non embarqué), CO-11 (`upx=False`).
 
 ---
 
@@ -382,8 +390,8 @@ en une transcription continue sans étiquette de locuteur.
 | **Objectif** | Mettre en cache le modèle Whisper, **unique** opération réseau tolérée. |
 
 **Scénario**
-1. Récupérer le modèle (`python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"`) **ou** passer ponctuellement `local_files_only: false`, lancer une fois, puis remettre `true`.
-2. Ensuite, fonctionnement 100 % hors-ligne (`HF_HUB_OFFLINE` forcé).
+1. Récupérer le modèle (`python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"` — adaptez `'medium'` au `model` de votre `config.yaml`) **ou** passer ponctuellement `local_files_only: false`, lancer une fois, puis remettre `true`.
+2. Ensuite, fonctionnement 100 % hors-ligne : `local_files_only` est passé inconditionnellement à `WhisperModel` ; `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` sont posés par défaut (`setdefault`).
 
 **Exigences liées** : CO-01, CO-02, PE-02 (préchargement).
 
@@ -401,4 +409,4 @@ en une transcription continue sans étiquette de locuteur.
 2. `config.yaml` : `device: cuda`, `compute_type: float16`.
 
 **Contrainte** : CPU et CUDA uniquement — **pas** de DirectML (AMD/Intel restent en CPU `int8`).
-**Exigences liées** : CO-12, PE-01.
+**Exigences liées** : FR-03, PE-01, CO-12.

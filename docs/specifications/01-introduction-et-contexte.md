@@ -1,4 +1,4 @@
-# 00 — Introduction & contexte
+# 01 — Introduction & contexte
 
 ## 1. Objet du document
 
@@ -82,8 +82,10 @@ Déclinaison :
 
 - Aucun appel réseau à l'usage, aucune télémétrie ; journalisation **strictement locale**.
 - **Seule exception tolérée** : le *premier* téléchargement du modèle Whisper. Ensuite,
-  `transcription.local_files_only: true` (le **défaut**) force le fonctionnement hors-ligne
-  (`HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` posés), vérifiable à l'analyseur réseau.
+  `transcription.local_files_only: true` (le **défaut**) active le fonctionnement hors-ligne :
+  `local_files_only` est passé **inconditionnellement** à `WhisperModel`, et
+  `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` sont posés **par défaut** (`setdefault`, non écrasés
+  s'ils existent déjà dans l'environnement). Comportement vérifiable à l'analyseur réseau.
 - Le **mode IA** n'accepte que des endpoints **locaux** (`localhost`, `127.0.0.1`, `::1`) ;
   tout hôte distant est **refusé par conception**.
 
@@ -96,7 +98,7 @@ introduit silencieusement**.
 |---|-----------|
 | H-01 | L'utilisateur dispose d'un PC Windows 10/11 64 bits avec un micro autorisé dans les paramètres de confidentialité. |
 | H-02 | Le premier lancement (téléchargement du modèle) dispose d'un accès réseau ponctuel ; ensuite l'usage est hors-ligne. |
-| H-03 | Le CPU est suffisant pour le modèle `medium` en `int8` ; sinon l'utilisateur rétrograde le modèle ou active CUDA. |
+| H-03 | Le CPU est suffisant pour le modèle visé (le `config.yaml` livré fixe `medium`/`int8` ; défaut interne du code : `small`) ; sinon l'utilisateur rétrograde le modèle ou active CUDA. |
 | H-04 | Pour les modes IA / assistant de réunion, un serveur LLM local (Ollama, LM Studio…) est installé et lancé par l'utilisateur. |
 | H-05 | Pour le loopback (live, réunion, assistant), le paquet `soundcard` est installé (WASAPI loopback). |
 | H-06 | L'utilisateur est responsable du **consentement** des participants avant tout enregistrement de réunion. |
