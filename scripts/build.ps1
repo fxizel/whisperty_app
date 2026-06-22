@@ -66,6 +66,11 @@ if (-not (Test-Path "$root\installer\whisperty.ico")) {
 Remove-Item -Recurse -Force "$root\build" -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force "$root\dist\whisperty" -ErrorAction SilentlyContinue
 
+# --- 4b. Métadonnées de version (exe Windows) ----------------------------------
+$version = (& $py -c "from whisperty.version import __version__; print(__version__)").Trim()
+Write-Host "Version Whisperty : $version" -ForegroundColor Cyan
+Invoke-Checked { & $py "$root\scripts\gen_version_info.py" } "gen_version_info.py"
+
 # --- 5. Build PyInstaller (onedir) ---------------------------------------------
 Write-Host "Build PyInstaller (onedir)…" -ForegroundColor Cyan
 Invoke-Checked { & $py -m PyInstaller --noconfirm "$root\whisperty.spec" } "PyInstaller"
@@ -112,6 +117,7 @@ $bytes = (Get-ChildItem -Recurse -File $appDir | Measure-Object -Property Length
 $mb = [math]::Round($bytes / 1MB, 0)
 Write-Host ""
 Write-Host "Build terminé : $appDir ($mb Mo)" -ForegroundColor Green
+Write-Host "  Version : $version"
 if ($bundleModel) { Write-Host "  Modèle bundlé : $bundleModel (100 % hors-ligne)" }
 else { Write-Host "  Sans modèle (léger) : téléchargé au 1er lancement" }
 Write-Host ""

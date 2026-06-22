@@ -6,4 +6,6 @@ post-traitement (dictionnaire) → injection dans l'application active.
 Aucune donnée ne quitte la machine.
 """
 
-__version__ = "0.1.0"
+from .version import __version__, version_info, version_tuple
+
+__all__ = ["__version__", "version_info", "version_tuple"]

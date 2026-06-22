@@ -177,6 +177,21 @@ input::placeholder { color: var(--faint); }
   letter-spacing: 0.6px; font-weight: 600; margin-bottom: 3px;
 }
 .model-card .v { font-size: 12.5px; color: var(--text-3); font-weight: 600; }
+.app-version {
+  padding: 0 4px 2px;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-align: center;
+}
+.config-version {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--dim);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
 
 /* ── Zone principale ──────────────────────────────────────────────────────── */
 .main { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }

@@ -175,6 +175,7 @@ def _make_app(tmp: Path):
 
 
 def test_gui_api_shapes(tmp_path: Path) -> None:
+    from whisperty import __version__
     from whisperty.gui import GuiApi, _fmt_time
     from datetime import datetime
 
@@ -198,6 +199,7 @@ def test_gui_api_shapes(tmp_path: Path) -> None:
     assert {it["source"] for it in h["items"]} == {"dictée", "réunion"}
 
     assert api.poll()["state"] == "idle"
+    assert api.get_version() == {"version": __version__}
     assert _fmt_time(datetime.now().isoformat(timespec="seconds")).startswith("Aujourd'hui")
     assert _fmt_time("2026-06-19T14:55:00").startswith("19 juin")
     print("[gui 6] GuiApi : get_config/get_dashboard/get_history/poll/_fmt_time  OK")

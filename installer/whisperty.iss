@@ -13,7 +13,12 @@
 ; ============================================================================
 
 #define MyAppName "Whisperty"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
+#ifndef MyAppVersionInfo
+  #define MyAppVersionInfo "0.1.0.0"
+#endif
 #define MyAppPublisher "Softcom"
 #define MyAppExeName "whisperty.exe"
 ; Dossier source produit par scripts\build.ps1 (relatif à ce .iss).
@@ -26,7 +31,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersionInfo}
 
 ; --- Installation par utilisateur (aucun droit admin requis) ---
 PrivilegesRequired=lowest

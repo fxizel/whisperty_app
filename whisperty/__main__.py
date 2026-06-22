@@ -33,6 +33,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Démarre en mode zone de notification seule (sans fenêtre).",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="%(prog)s " + __import__("whisperty").__version__,
+    )
     args = parser.parse_args(argv)
 
     config = Config.load(args.config)

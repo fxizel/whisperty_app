@@ -43,8 +43,15 @@ if (-not $iscc) {
 }
 Write-Host "Inno Setup : $iscc" -ForegroundColor Cyan
 
+# --- 2b. Version (source unique : whisperty.version) ---------------------------
+$py = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path $py)) { $py = "python" }
+$version = (& $py -c "from whisperty.version import __version__; print(__version__)").Trim()
+$versionInfo = (& $py -c "from whisperty.version import version_info; print(version_info())").Trim()
+Write-Host "Version Whisperty : $version ($versionInfo)" -ForegroundColor Cyan
+
 # --- 3. Compiler ---------------------------------------------------------------
-& $iscc "$root\installer\whisperty.iss"
+& $iscc "/DMyAppVersion=$version" "/DMyAppVersionInfo=$versionInfo" "$root\installer\whisperty.iss"
 if ($LASTEXITCODE -ne 0) { throw "Échec de la compilation Inno Setup (code $LASTEXITCODE)." }
 
 $out = Get-ChildItem "$root\dist\installer\*.exe" -ErrorAction SilentlyContinue |
