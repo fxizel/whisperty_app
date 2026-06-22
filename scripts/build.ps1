@@ -50,7 +50,12 @@ if (-not (Test-Path $py)) {
 }
 
 # --- 2. PyInstaller présent ? --------------------------------------------------
-& $py -c "import PyInstaller" 2>$null
+# Sonde via find_spec (sans import réel) : si le paquet est absent, AUCUNE trace n'est
+# écrite sur stderr — seul le code de sortie l'indique. On évite ainsi le piège de
+# PowerShell 5.1 où rediriger stderr (2>$null) d'une commande native sous
+# $ErrorActionPreference='Stop' transforme la moindre écriture stderr (ici la traceback
+# d'un import manquant) en NativeCommandError terminante.
+& $py -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installation de PyInstaller…" -ForegroundColor Cyan
     Invoke-Checked { & $py -m pip install "pyinstaller>=6.0" } "pip install pyinstaller"
