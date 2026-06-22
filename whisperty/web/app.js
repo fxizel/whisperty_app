@@ -50,6 +50,9 @@ const Mock = (() => {
   // Machine à états factice (anime le visualiseur dans l'aperçu).
   let state = "idle", timer = null, mode = "dictee";
 
+  // État GPU factice : GPU présent mais composants absents → démontre le flux d'install.
+  let gpu = { gpu: true, components: false, canInstall: true, install: "idle", message: "" };
+
   // Flux live factice (modes live/conférence) : des segments s'ajoutent au fil de
   // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
   let liveRev = 0, liveLines = [], liveTimer = null;
@@ -101,6 +104,16 @@ const Mock = (() => {
     },
     get_config: () => JSON.parse(JSON.stringify(cfg)),
     save_config: (p) => { Object.assign(cfg, p); return { ok: true }; },
+    gpu_status: () => ({ ...gpu }),
+    install_gpu: () => {
+      if (gpu.install === "running") return { ok: true, state: "running" };
+      gpu.install = "running"; gpu.message = "Téléchargement des composants GPU (~1,3 Go)…";
+      setTimeout(() => {
+        gpu.install = "done"; gpu.components = true;
+        gpu.message = "Composants GPU installés. Activez « CUDA (GPU) » puis enregistrez.";
+      }, 3500);
+      return { ok: true, state: "running" };
+    },
     list_microphones: () => cfg.mics,
     list_audio_outputs: () => [
       { value: null, label: "Sortie par défaut" },
@@ -475,9 +488,89 @@ async function loadConfig() {
   // Confidentialité
   setSwitch($("#local-switch"), c.localOnly);
   $("#local-badge").style.display = c.localOnly ? "" : "none";
+
+  // Support GPU (affiché si CUDA sélectionné)
+  refreshGpuStatus();
 }
 
 function setSwitch(el, on) { el.classList.toggle("on", !!on); }
+
+// ───────────────────────────── Support GPU (CUDA) ──────────────────────────
+let gpuPollTimer = null;
+
+// Met à jour la zone d'état GPU selon le périphérique choisi et l'état détecté/installé.
+// Modèle polling (cohérent avec le reste) : reprogrammé toutes les 1,5 s pendant une
+// installation, sinon ponctuel (au chargement et au changement de périphérique).
+async function refreshGpuStatus() {
+  const box = $("#gpu-status");
+  const txt = $("#gpu-status-text");
+  const btn = $("#gpu-install-btn");
+  if (!box) return;
+  if (gpuPollTimer) { clearTimeout(gpuPollTimer); gpuPollTimer = null; }
+
+  // Affichée uniquement quand CUDA est sélectionné (le CPU n'a rien à installer).
+  if (($("#cfg-device").value || "").toUpperCase() !== "CUDA") {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "";
+
+  const s = (await call("gpu_status")) || {};
+  btn.style.display = "none";
+  btn.disabled = false;
+
+  if (s.install === "running") {
+    txt.style.color = "var(--violet-2)";
+    txt.textContent = s.message || "Installation des composants GPU en cours…";
+    gpuPollTimer = setTimeout(refreshGpuStatus, 1500);  // suit la progression
+    return;
+  }
+  if (s.install === "error") {
+    txt.style.color = "var(--red-2)";
+    txt.textContent = s.message || "L'installation a échoué.";
+    btn.textContent = "Réessayer l'installation";
+    btn.style.display = "";
+    return;
+  }
+  if (s.components) {
+    txt.style.color = "var(--green-2)";
+    txt.textContent = s.gpu
+      ? "✓ Support GPU prêt — la dictée utilisera le GPU (CUDA)."
+      : "✓ Composants GPU installés (aucun GPU détecté pour l'instant).";
+    return;
+  }
+  if (!s.gpu) {
+    txt.style.color = "var(--muted)";
+    txt.textContent = "Aucun GPU NVIDIA détecté — la dictée restera sur le CPU.";
+    return;
+  }
+  // GPU présent, composants absents.
+  if (s.canInstall) {
+    txt.style.color = "var(--muted)";
+    txt.textContent = "Le mode GPU nécessite des composants NVIDIA (cuBLAS/cuDNN), "
+      + "téléchargés une seule fois depuis PyPI (~1,3 Go). En attendant, la dictée reste sur le CPU.";
+    btn.textContent = "Installer le support GPU (~1,3 Go)";
+    btn.style.display = "";
+  } else {
+    txt.style.color = "var(--muted)";
+    txt.textContent = "Composants GPU requis mais installation automatique indisponible "
+      + "dans cette version. La dictée reste sur le CPU.";
+  }
+}
+
+async function installGpu() {
+  const btn = $("#gpu-install-btn");
+  btn.disabled = true;
+  const r = (await call("install_gpu")) || {};
+  if (r.ok === false) {
+    const txt = $("#gpu-status-text");
+    txt.style.color = "var(--red-2)";
+    txt.textContent = r.error || "Installation impossible.";
+    btn.disabled = false;
+    return;
+  }
+  refreshGpuStatus();  // bascule en mode « running » + démarre le polling
+}
 
 function applyIaState(on) {
   const f = $("#ia-fields");
@@ -486,7 +579,8 @@ function applyIaState(on) {
 }
 
 function bindConfig() {
-  $("#cfg-device").addEventListener("change", e => { ui.cfg.device = e.target.value; });
+  $("#cfg-device").addEventListener("change", e => { ui.cfg.device = e.target.value; refreshGpuStatus(); });
+  $("#gpu-install-btn").addEventListener("click", installGpu);
   $("#cfg-langue").addEventListener("change", e => { ui.cfg.langue = e.target.value; });
   $("#cfg-mic").addEventListener("change", e => { ui.cfg.mic = e.target.value === "" ? null : Number(e.target.value); });
 

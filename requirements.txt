@@ -43,6 +43,8 @@ pywebview>=5.0          # fenêtre native rendant l'UI HTML via Edge WebView2 (p
 # mypy>=1.8
 
 # --- Accélération GPU NVIDIA (optionnel — voir README) -------------------------
-# Installer séparément des bibliothèques CUDA 12 / cuDNN 9 compatibles CTranslate2 :
-#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# Bibliothèques CUDA 12 / cuDNN 9 compatibles CTranslate2. Installables :
+#   - depuis l'écran Configuration (bouton « Installer le support GPU » quand CUDA est choisi),
+#   - ou manuellement : pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# Si CUDA est demandé sans ces composants (ou sans GPU), l'app retombe sur le CPU int8.
 # DirectML / GPU AMD / Intel ne sont PAS supportés par CTranslate2 (CPU + CUDA seulement).

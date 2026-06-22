@@ -41,7 +41,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | Module (`whisperty/`) | Rôle | État |
 |------------------------|------|------|
 | `recorder.py` | Capture micro non bloquante (sounddevice), RMS pour VAD/tray, WAV PCM16, thread-safe | fait |
-| `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne) | fait |
+| `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne, DLL CUDA + repli CPU) | fait |
+| `cuda.py` | Détection GPU/composants CUDA + installation **opt-in** des wheels nvidia (cuBLAS/cuDNN) | fait |
 | `injector.py` | Injection texte (collage Ctrl+V par défaut, frappe en repli) | fait |
 | `tray.py` | Icône zone de notification (pystray) | fait |
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
@@ -104,6 +105,18 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   n'expose pas 16 kHz (soxr, repli interpolation NumPy).
 - **GPU** : CTranslate2 ne supporte que **CPU et CUDA**. Pas de DirectML — ne pas le proposer
   pour AMD/Intel ; sur ces GPU, rester en CPU int8 (ou envisager whisper.cpp/Vulkan).
+- **CUDA (composants + repli, `cuda.py`)** : en mode CUDA, CTranslate2 charge cuBLAS/cuDNN
+  (wheels pip `nvidia-cublas-cu12`/`nvidia-cudnn-cu12`) **paresseusement au 1er encodage**.
+  ⚠️ Sur Windows ces DLL ne sont PAS trouvées par défaut (dossier `nvidia/*/bin` hors PATH) ET
+  l'init WebView2/.NET appelle `SetDefaultDllDirectories`, restreignant la recherche → ni PATH ni
+  `add_dll_directory` ne suffisent. `transcriber._add_cuda_dll_directories` **précharge donc les
+  DLL par chemin absolu** (`ctypes.WinDLL`, winmode `DEFAULT_DIRS|DLL_LOAD_DIR`) dès `load()` :
+  une fois résidentes, le `LoadLibrary` par nom de CTranslate2 les retrouve quelle que soit la
+  politique. Si CUDA est demandé mais GPU/composants absents → **repli gracieux CPU int8**
+  (`_effective_device_compute`, `cfg.device` inchangé) au lieu d'un plantage à la 1re dictée.
+  Installation des composants **opt-in** depuis l'écran Configuration (`GuiApi.install_gpu` →
+  `cuda.start_install`, suivi par polling `gpu_status`) : ~1,3 Go, SEUL appel réseau (analogue au
+  modèle), jamais silencieux, indisponible en exe figé (`can_install`=false, pas de pip).
 - **Confidentialité** : `local_files_only` est **true par défaut** (zéro réseau) ; en mode
   hors-ligne, `transcriber.load()` pose aussi `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`.
 - **IA locale (V2)** : `ai.py` n'autorise QUE des endpoints locaux (`ai.is_local_endpoint` :

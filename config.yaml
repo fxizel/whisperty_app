@@ -12,7 +12,7 @@ transcription:
   model: medium           # base | small | medium | large-v3  (medium = bon compromis
                           # précision/vitesse sur CPU pour le français technique)
   language: fr            # langue forcée (fr) ; null = détection automatique
-  device: cpu             # cpu | cuda
+  device: cuda # cpu | cuda
   compute_type: int8      # int8 (CPU) | float16 (CUDA) | int8_float16
   beam_size: 5
   local_files_only: true  # 100 % hors-ligne (défaut). Passer à false UNE fois pour

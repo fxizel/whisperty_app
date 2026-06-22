@@ -283,6 +283,38 @@ class GuiApi:
     def save_config(self, payload: Optional[dict]) -> dict:
         return self._app.apply_config_from_gui(payload or {})
 
+    # -- support GPU (CUDA) ----------------------------------------------------
+    def gpu_status(self) -> dict:
+        """État du support GPU pour l'écran Configuration (détection + installation).
+
+        Renvoie ``{gpu, components, canInstall, install, message}`` : présence d'un GPU
+        NVIDIA, présence des composants cuBLAS/cuDNN, possibilité d'installer (mode source),
+        et l'état/message de l'installation en cours (interrogé par polling pendant celle-ci).
+        """
+        try:
+            from . import cuda
+
+            return cuda.status()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lecture de l'état GPU échouée")
+            return {"gpu": False, "components": False, "canInstall": False,
+                    "install": "idle", "message": ""}
+
+    def install_gpu(self) -> dict:
+        """Lance l'installation opt-in des composants GPU (~1,3 Go). Non bloquant.
+
+        Le téléchargement est le SEUL appel réseau, explicitement déclenché par l'utilisateur
+        (analogue au téléchargement initial du modèle). La progression est suivie par
+        ``gpu_status`` (polling). Indisponible dans l'exe figé (pas de pip).
+        """
+        try:
+            from . import cuda
+
+            return cuda.start_install()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lancement de l'installation GPU échoué")
+            return {"ok": False, "error": "Installation impossible."}
+
     # -- historique ------------------------------------------------------------
     def get_history(self) -> dict:
         try:
