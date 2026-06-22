@@ -28,6 +28,8 @@ from .version import __version__
 if TYPE_CHECKING:
     from .app import WhispertyApp
 
+logger = logging.getLogger(__name__)
+
 _MONTHS_FR = [
     "janv.", "févr.", "mars", "avr.", "mai", "juin",
     "juil.", "août", "sept.", "oct.", "nov.", "déc.",
