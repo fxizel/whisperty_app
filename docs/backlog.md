@@ -105,7 +105,7 @@ de parler, **afin de** ne pas avoir à le couper manuellement à chaque fois.
 ### ST-1.8 — Connaître l'état de l'application en un coup d'œil
 **En tant qu'**utilisateur, **je veux** voir immédiatement l'état de l'application, **afin de**
 ne dicter que lorsqu'elle écoute vraiment et de ne pas attendre inutilement quand elle a terminé.
-- Une icône dans la barre de notification change de couleur selon l'état : prêt, enregistrement, traitement en cours, transcription en direct, réunion, assistant de réunion.
+- Une icône dans la barre de notification change de couleur selon l'état : prêt, enregistrement, traitement en cours, transcription en direct, réunion.
 - Survoler l'icône affiche un texte décrivant l'état courant.
 - L'état affiché correspond toujours à l'activité réelle de l'application.
 - **Priorité : Must** · **Parent : EPIC-1**
@@ -151,9 +151,9 @@ texte mieux adapté à chaque contexte.
 automatique de la ponctuation, des majuscules et des fautes évidentes, **afin d'**obtenir un
 texte plus propre sans relecture systématique — tout en gardant mes données chez moi.
 - Je peux activer une amélioration automatique de la ponctuation, de la casse et des fautes manifestes, sans reformulation de mon propos.
-- Cette amélioration s'appuie **uniquement** sur un assistant fonctionnant sur ma propre machine.
+- Cette amélioration s'appuie **uniquement** sur un LLM fonctionnant sur ma propre machine.
 - Toute tentative d'utiliser un service extérieur est **refusée avant tout envoi** ; même un détour qui ferait sortir le texte de l'ordinateur est bloqué.
-- Si l'assistant n'est pas disponible ou échoue, ma dictée est conservée telle quelle, sans blocage.
+- Si le LLM local n'est pas disponible ou échoue, ma dictée est conservée telle quelle, sans blocage.
 - Cette fonction est désactivée par défaut et doit être activée explicitement.
 - **Priorité : Should** · **Parent : EPIC-2**
 
@@ -164,8 +164,8 @@ texte plus propre sans relecture systématique — tout en gardant mes données 
 **Priorité : Should / Could**
 
 **Description.** Étendre Whisperty au-delà de la dictée immédiate : transcription de fichiers
-audio, historique réutilisable, suivi en direct d'une réunion en ligne, transcription complète
-d'une réunion avec distinction des intervenants, et suggestions de réponses. Tous ces modes
+audio, historique réutilisable, suivi en direct d'une réunion en ligne et transcription complète
+d'une réunion avec distinction des intervenants. Tous ces modes
 restent 100 % locaux et, pour ceux qui captent une conversation, rappellent la nécessité du
 consentement.
 
@@ -223,17 +223,6 @@ de celle des interlocuteurs, **afin de** savoir clairement qui a dit quoi.
 - La distinction repose sur la source du son (déterministe) et ne fait appel à aucun service externe.
 - **Priorité : Could** · **Parent : EPIC-3**
 
-### ST-3.6 — Recevoir des suggestions de réponse pendant une réunion
-**En tant que** participant sollicité en réunion, **je veux** une suggestion de réponse quand on
-m'adresse une question, **afin de** réagir plus vite et plus sereinement.
-- L'application écoute la réunion et détecte les questions qui me sont adressées.
-- Une réponse est proposée, rédigée par l'assistant **local**, à partir du contexte récent de la réunion.
-- Par défaut, la réponse est copiée pour que je décide de l'utiliser ; je peux aussi choisir qu'elle soit insérée directement.
-- Cette fonction nécessite que l'amélioration par IA locale soit activée (cf. ST-2.3) et que j'aie renseigné mon nom dans les réglages (cf. ST-4.1) ; sinon, l'application me l'explique clairement.
-- **Priorité : Could** · **Parent : EPIC-3**
-
----
-
 # EPIC-4 — Configuration & déploiement
 
 **Priorité : Must / Could**
@@ -256,13 +245,12 @@ technique.
 - Chaque réglage est documenté (rôle, valeurs possibles, valeur par défaut).
 - Les modifications sont prises en compte au redémarrage de l'application.
 - En l'absence de fichier, l'application démarre avec des réglages par défaut raisonnables.
-- Les réglages incluent les informations nécessaires aux fonctions avancées (par exemple mon nom, utilisé par l'assistant de réunion — cf. ST-3.6).
 - **Priorité : Must** · **Parent : EPIC-4**
 
 ### ST-4.2 — Accéder aux fonctions depuis le menu de l'icône
 **En tant qu'**utilisateur, **je veux** accéder à toutes les fonctions depuis le menu de l'icône,
 **afin de** piloter l'application sans interface complexe.
-- Le menu donne accès à : dictée, transcription en direct, réunion, assistant de réunion, import de fichier, historique, configuration et fermeture.
+- Le menu donne accès à : dictée, transcription en direct, réunion, import de fichier, historique, configuration et fermeture.
 - Une fonction non configurée apparaît désactivée (grisée).
 - Si je lance un mode alors qu'un autre est déjà actif, l'application me le signale clairement au lieu de se bloquer.
 - Je peux ouvrir directement la configuration et l'emplacement de l'historique depuis le menu.
@@ -330,7 +318,7 @@ ne sort de la machine, **afin d'**autoriser l'usage de l'outil sur des informati
 actions s'enchaînent, **afin de** ne jamais subir de blocage ni de gel.
 - Une seule activité de transcription peut être active à la fois ; toute demande concurrente est signalée plutôt que d'entraîner un blocage.
 - Pendant qu'une transcription est en cours, l'icône et son menu restent accessibles et répondent aux clics ; aucune action de l'utilisateur n'est ignorée.
-- Les modes longs (transcription en direct, réunion, assistant de réunion) s'exécutent en arrière-plan sans figer l'application ; un arrêt demandé pendant qu'ils tournent est toujours pris en compte, sans gel.
+- Les modes longs (transcription en direct, réunion) s'exécutent en arrière-plan sans figer l'application ; un arrêt demandé pendant qu'ils tournent est toujours pris en compte, sans gel.
 - Les démarrages et arrêts rapprochés ne provoquent ni gel ni comportement incohérent.
 - **Priorité : Must** · **Parent : EPIC-5**
 

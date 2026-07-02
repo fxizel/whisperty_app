@@ -15,7 +15,7 @@ Whisperty est une application **de bureau Windows 10/11** offrant :
 - la **dictée vocale** transcrite localement et injectée dans l'application active ;
 - des fonctions connexes de transcription (import de fichiers, capture d'une sortie audio en
   direct, mode réunion) et de productivité (historique, profils de contexte, raffinage IA
-  local, assistant de réunion).
+  local).
 
 L'ensemble fonctionne **sans aucun envoi de données hors de la machine** (cf. §5).
 
@@ -43,7 +43,7 @@ L'ensemble fonctionne **sans aucun envoi de données hors de la machine** (cf. �
 | **Profil de contexte** | Jeu de réglages (prompt, langue, dictionnaire) appliqué selon l'application active au démarrage de la dictée. |
 | **LLM local** | Modèle de langage servi sur la machine (Ollama, LM Studio…) via un endpoint compatible OpenAI, **localhost uniquement**. |
 | **Tray** | Icône de la zone de notification Windows, point d'entrée des actions et indicateur d'état. |
-| **Mode exclusif** | Mode (live, réunion, assistant) qui monopolise l'application : aucune autre opération concurrente. |
+| **Mode exclusif** | Mode (live, réunion) qui monopolise l'application : aucune autre opération concurrente. |
 | **Itération 1 / 2 (réunion)** | Mixage des sources en une voix (it. 1) *vs* distinction par source entrelacée chronologiquement (it. 2). |
 
 ## 4. Vision & proposition de valeur
@@ -99,8 +99,8 @@ introduit silencieusement**.
 | H-01 | L'utilisateur dispose d'un PC Windows 10/11 64 bits avec un micro autorisé dans les paramètres de confidentialité. |
 | H-02 | Le premier lancement (téléchargement du modèle) dispose d'un accès réseau ponctuel ; ensuite l'usage est hors-ligne. |
 | H-03 | Le CPU est suffisant pour le modèle visé (le `config.yaml` livré fixe `medium`/`int8` ; défaut interne du code : `small`) ; sinon l'utilisateur rétrograde le modèle ou active CUDA. |
-| H-04 | Pour les modes IA / assistant de réunion, un serveur LLM local (Ollama, LM Studio…) est installé et lancé par l'utilisateur. |
-| H-05 | Pour le loopback (live, réunion, assistant), le paquet `soundcard` est installé (WASAPI loopback). |
+| H-04 | Pour le mode IA, un serveur LLM local (Ollama, LM Studio…) est installé et lancé par l'utilisateur. |
+| H-05 | Pour le loopback (live, réunion), le paquet `soundcard` est installé (WASAPI loopback). |
 | H-06 | L'utilisateur est responsable du **consentement** des participants avant tout enregistrement de réunion. |
 
 ## 7. Contraintes (synthèse — détaillées en `CO-xx`)

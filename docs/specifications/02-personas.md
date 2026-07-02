@@ -108,21 +108,19 @@ injection system-wide (UC-01), robustesse (RE).
 | | |
 |---|---|
 | **Rôle** | Anime et suit de nombreuses réunions et webinaires (Teams, Meet, Zoom). |
-| **Contexte** | A besoin de comptes rendus et de réponses rapides en séance ; reçoit aussi des fichiers audio à transcrire. |
+| **Contexte** | A besoin de comptes rendus en séance ; reçoit aussi des fichiers audio à transcrire. |
 | **Compétence technique** | Moyenne. |
 
 **Objectifs**
 - Suivre une visioconférence avec une **transcription en direct** de ce qui se dit.
 - Obtenir un **transcript horodaté exporté** d'une réunion, sans prise de notes manuelle.
-- Être assistée pour **répondre** quand on l'interpelle pendant une réunion.
 - Transcrire des **fichiers audio** reçus (interviews, mémos).
 
 **Frustrations**
 - Jongler entre écoute, prise de notes et réponses.
 - Outils de transcription qui imposent un envoi des enregistrements en ligne.
 
-**Fonctionnalités clés** : transcription live (UC-09), mode réunion (UC-10), assistant de
-réunion (UC-11), import de fichier audio (UC-07).
+**Fonctionnalités clés** : transcription live (UC-09), mode réunion (UC-10), import de fichier audio (UC-07).
 
 ---
 

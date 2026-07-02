@@ -16,7 +16,6 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-08 Historique | ○ | ● | ○ | ○ | ● | |
 | UC-09 Live | | ○ | | | ● | |
 | UC-10 Réunion | | ● | ○ | | ● | |
-| UC-11 Assistant | | ○ | | | ● | |
 | UC-12 Configurer | ● | ○ | ○ | ○ | ○ | ● |
 | UC-13 Packaging/autostart | | | ○ | | | ● |
 | UC-14 Modèle initial | ○ | ○ | ○ | ○ | ○ | ● |
@@ -43,7 +42,6 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-08 Historique | FR-11 | RE-07, RE-10, US-02, SU-03, SU-08 |
 | UC-09 Live | FR-12, FR-16, FR-19, FR-20 | RE-08, RE-10, PE-03, PE-04, US-02, US-07, US-09, CO-05, CO-06, BR-06 |
 | UC-10 Réunion | FR-13, FR-16, FR-19, FR-20 | RE-08, RE-09, RE-10, PE-03, US-02, US-07, US-09, CO-04, CO-05, CO-06, CO-16, BR-05, BR-06 |
-| UC-11 Assistant | FR-14, FR-16, FR-19, FR-20, FR-22 | RE-06, RE-08, RE-10, US-02, US-07, CO-03, CO-06, CO-16, BR-05, BR-07 |
 | UC-12 Configurer | FR-17, FR-21 | US-02, US-05, SU-01, SU-08 |
 | UC-13 Packaging | FR-17 | SU-04, CO-08, CO-11 |
 | UC-14 Modèle initial | FR-18 | PE-02, CO-01, CO-02 |
@@ -68,22 +66,21 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-11 | UC-08 |
 | FR-12 | UC-09 |
 | FR-13 | UC-10 |
-| FR-14 | UC-11 |
 | FR-15 | UC-03 |
-| FR-16 | UC-01, UC-09, UC-10, UC-11 |
+| FR-16 | UC-01, UC-09, UC-10 |
 | FR-17 | UC-12, UC-13 |
 | FR-18 | UC-01, UC-14 |
-| FR-19 | UC-01, UC-09, UC-10, UC-11 (exclusivité des modes) |
-| FR-20 | UC-01, UC-07, UC-09, UC-10, UC-11 |
+| FR-19 | UC-01, UC-09, UC-10 (exclusivité des modes) |
+| FR-20 | UC-01, UC-07, UC-09, UC-10 |
 | FR-21 | UC-01, UC-12 |
-| FR-22 | UC-06, UC-11 |
+| FR-22 | UC-06 |
 | US-01 | UC-01, UC-02 |
-| US-02 | UC-07, UC-08, UC-09, UC-10, UC-11, UC-12 |
+| US-02 | UC-07, UC-08, UC-09, UC-10, UC-12 |
 | US-03 | UC-01 |
 | US-04 | UC-01, UC-04 |
 | US-05 | UC-12 |
 | US-06 | UC-02, UC-03 |
-| US-07 | UC-07, UC-09, UC-10, UC-11 |
+| US-07 | UC-07, UC-09, UC-10 |
 | US-08 | UC-02 |
 | US-09 | UC-09, UC-10 |
 | RE-01 | UC-01 |
@@ -91,11 +88,11 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RE-03 | UC-03 |
 | RE-04 | transverse (concurrence) |
 | RE-05 | UC-01, UC-02 |
-| RE-06 | UC-06, UC-11 |
+| RE-06 | UC-06 |
 | RE-07 | UC-08 |
-| RE-08 | UC-09, UC-10, UC-11 |
+| RE-08 | UC-09, UC-10 |
 | RE-09 | UC-10 |
-| RE-10 | UC-08, UC-09, UC-10, UC-11 |
+| RE-10 | UC-08, UC-09, UC-10 |
 | PE-01 | UC-01, UC-15 |
 | PE-02 | UC-01, UC-14 |
 | PE-03 | UC-01, UC-09, UC-10 |
@@ -111,10 +108,10 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | SU-08 | UC-08, UC-12 |
 | CO-01 | UC-01, UC-06, UC-14 (+ transverse, cardinal) |
 | CO-02 | UC-14 |
-| CO-03 | UC-06, UC-11 |
+| CO-03 | UC-06 |
 | CO-04 | UC-10 |
 | CO-05 | UC-09, UC-10 |
-| CO-06 | UC-09, UC-10, UC-11 |
+| CO-06 | UC-09, UC-10 |
 | CO-07 | UC-07 |
 | CO-08 | UC-13 |
 | CO-09 | UC-02 |
@@ -124,14 +121,13 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-13 | UC-01 |
 | CO-14 | transverse (packaging/nommage) |
 | CO-15 | transverse (plateforme) |
-| CO-16 | UC-10, UC-11 |
+| CO-16 | UC-10 |
 | BR-01 | UC-01, UC-02 (exclusivité, transverse aux modes) |
 | BR-02 | UC-01 |
 | BR-03 | UC-01, UC-04, UC-06 |
 | BR-04 | UC-01 |
-| BR-05 | UC-10, UC-11 |
+| BR-05 | UC-10 |
 | BR-06 | UC-07, UC-09, UC-10 |
-| BR-07 | UC-11 |
 
 > **Conclusion** : aucune exigence orpheline — chaque exigence (FR/US/RE/PE/SU/CO) et chaque
 > règle de gestion (BR) sert ≥ 1 UC ou est explicitement **transverse**. Les exigences purement
@@ -149,7 +145,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RSK-04 | **Interblocage** entre verrou d'état et arrêt des modes longs. | Élevé | Faible | Ordre de verrouillage strict + arrêt par callback sans `join()` sous verrou (RE-04, RE-08). |
 | RSK-05 | **Mauvaise cible d'injection** (changement de fenêtre pendant la dictée). | Moyen | Moyen | Profil/cible capturés au démarrage (CO-10) ; sensibiliser l'utilisateur ; modes passifs non injectés (BR-06). |
 | RSK-06 | **Enregistrement de réunion sans consentement** → risque juridique. | Élevé | Moyen | Rappel au démarrage + règle BR-05/CO-16 ; responsabilité utilisateur documentée. |
-| RSK-07 | **Dépendance à un LLM local non installé** pour IA/assistant. | Faible | Élevé | Fonctions opt-in, refus explicite, dégradation gracieuse (texte brut) (RE-06, BR-07). |
+| RSK-07 | **Dépendance à un LLM local non installé** pour l'IA locale. | Faible | Élevé | Fonction opt-in, dégradation gracieuse (texte brut) (RE-06). |
 | RSK-08 | **Modèle non pré-téléchargé** au premier lancement hors-ligne. | Moyen | Moyen | Procédure dédiée (UC-14) ; message d'erreur explicite ; `local_files_only` documenté. |
 | RSK-09 | **Corruption d'injection** des accents en mode `type` (frappe). | Faible | Faible | Collage par défaut (BR-04) ; `type` réservé au repli. |
 | RSK-10 | **Perte du transcript de réunion** si arrêt brutal. | Moyen | Faible | Écriture au fil de l'eau (live) + archivage avant fermeture de base (RE-10). |

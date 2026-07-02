@@ -49,7 +49,7 @@ flowchart LR
 - 🧠 Transcription Whisper locale, **modèle configurable** (base / small / medium / large-v3), CPU ou CUDA.
 - ⌨️ **Injection system-wide** dans l'app active (Ctrl+V robuste pour les accents, frappe en repli).
 - 📖 **Dictionnaire personnalisé** : termes métier favorisés + corrections automatiques.
-- 🔔 Icône tray colorée selon l'état (gris / rouge / orange / bleu / vert / violet).
+- 🔔 Icône tray colorée selon l'état (gris / rouge / orange / bleu / vert).
 
 **Interface & historique**
 - 🖥️ **Fenêtre WebView2** — dashboard (statut live, dernière transcription, statistiques du jour),
@@ -67,8 +67,6 @@ flowchart LR
   (nécessite `pip install soundcard`).
 - 🧑‍🤝‍🧑 **Mode réunion** — capture micro + sortie système simultanés, export horodaté avec distinction
   par locuteur (`Moi` / `Interlocuteurs`), déterministe et 100 % local.
-- 💬 **Assistant de réunion** — propose des réponses LLM locales quand une question vous est posée
-  (nécessite `ai.enabled: true`).
 
 > ⚖️ Pensez au **consentement** des participants avant d'enregistrer une réunion.
 
@@ -129,7 +127,6 @@ la plupart des changements à chaud.
 | `profiles` | `enabled`, `definitions` |
 | `live` | `device`, `max_segment`, `silence_duration`, `transcript_dir` |
 | `conference` | `system_device`, `mic_device`, `distinguish_speakers`, `export_dir` |
-| `meeting` | `user_name`, `user_context`, `auto_inject` |
 | `gui` | `enabled` (`false` ou `--no-gui` = tray seul) |
 
 ## Dictionnaire personnalisé
@@ -202,7 +199,7 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost) |
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |
 | `loopback.py` · `live.py` | Capture loopback (soundcard/WASAPI) + transcription live |
-| `conference.py` · `meeting.py` | Mode réunion + assistant de réunion |
+| `conference.py` | Mode réunion |
 | `gui.py` · `web/` | Fenêtre WebView2 (pywebview) + pont Python↔JS + assets UI |
 | `configio.py` | Écriture chirurgicale de `config.yaml` (préserve commentaires/ordre) |
 
@@ -215,5 +212,5 @@ Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md)
 - [x] Injection de texte system-wide
 - [x] Raccourci global + icône tray + configuration YAML
 - [x] Packaging (exe) + démarrage automatique
-- [x] **V2** — import audio, IA locale, historique SQLite, profils, transcription live, mode réunion, assistant
+- [x] **V2** — import audio, IA locale, historique SQLite, profils, transcription live, mode réunion
 - [x] **Interface fenêtre** (WebView2) — dashboard, configuration visuelle, historique navigable

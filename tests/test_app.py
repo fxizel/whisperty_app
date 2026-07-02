@@ -1,7 +1,7 @@
 """Tests hors-ligne de l'orchestration (``whisperty.app.WhispertyApp``).
 
 Couvre les chemins non testés par ``test_logic.py`` : traitement d'une dictée et
-d'un fichier importé, modes live/réunion/assistant (transitions d'état +
+d'un fichier importé, modes live/réunion (transitions d'état +
 notifications), historique (copier la dernière), surveillance VAD, validation du
 raccourci, robustesse du démarrage de thread, préchargement et arrêt propre.
 
@@ -96,7 +96,7 @@ class FakeTranscriber:
 
 
 class FakeWorker:
-    """Doublure de LiveTranscriber / ConferenceTranscriber / MeetingAssistant."""
+    """Doublure de LiveTranscriber / ConferenceTranscriber."""
 
     def __init__(self, start_ok=True):
         self.start_ok = start_ok
@@ -321,60 +321,7 @@ def test_conference_lifecycle(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# 6) Assistant de réunion : gardes (ai/user_name) + cycle de vie
-# =============================================================================
-def test_meeting_guards_and_lifecycle(tmp_path: Path) -> None:
-    from whisperty.tray import TrayState
-
-    # (a) ai.enabled = False → refus, pas de démarrage.
-    app, cfg = _make_app(tmp_path)
-    app.meeting = FakeWorker()
-    cfg.ai.enabled = False
-    cfg.meeting.user_name = "Jean"
-    app.start_meeting()
-    assert app.meeting.started_with == [] and app._state is TrayState.IDLE
-    assert any("ai.enabled" in n for n in app.tray.notes)
-
-    # (b) user_name vide → refus.
-    app2, cfg2 = _make_app(tmp_path)
-    app2.meeting = FakeWorker()
-    cfg2.ai.enabled = True
-    cfg2.meeting.user_name = "   "
-    app2.start_meeting()
-    assert app2.meeting.started_with == [] and app2._state is TrayState.IDLE
-    assert any("user_name" in n for n in app2.tray.notes)
-
-    # (c) Conditions remplies → démarre, état MEETING, notification « actif ».
-    app3, cfg3 = _make_app(tmp_path)
-    app3.meeting = FakeWorker(start_ok=True)
-    cfg3.ai.enabled = True
-    cfg3.meeting.user_name = "Jean"
-    app3.start_meeting()
-    assert app3._state is TrayState.MEETING
-    assert app3.meeting.started_with == [cfg3.live.device]
-    assert any("actif" in n.lower() for n in app3.tray.notes)
-
-    # (d) Échec du démarrage → retour IDLE.
-    app4, cfg4 = _make_app(tmp_path)
-    app4.meeting = FakeWorker(start_ok=False)
-    cfg4.ai.enabled = True
-    cfg4.meeting.user_name = "Jean"
-    app4.start_meeting()
-    assert app4._state is TrayState.IDLE
-
-    # (e) Callback de fin avec réponses → historique + copie + notif « réponse(s) ».
-    app5, _ = _make_app(tmp_path)
-    app5._state = TrayState.MEETING
-    app5._on_meeting_finished({"text": "tr", "reply_count": 2, "device": "Spk"})
-    assert app5._state is TrayState.IDLE
-    assert app5.history.added[-1]["source"] == "réunion-transcript"
-    assert app5.injector.copied == ["tr"]
-    assert any("réponse" in n.lower() for n in app5.tray.notes)
-    print("[app 9] assistant réunion : gardes ai/user_name + cycle + fin  OK")
-
-
-# =============================================================================
-# 7) Validation du raccourci clavier
+# 6) Validation du raccourci clavier
 # =============================================================================
 def test_validated_combo() -> None:
     from whisperty.app import WhispertyApp
@@ -500,13 +447,11 @@ def test_quit(tmp_path: Path) -> None:
     app.recorder = types.SimpleNamespace(stop=lambda: None)
     app.live = FakeWorker()
     app.conference = FakeWorker()
-    app.meeting = FakeWorker()
 
     app.quit()
     assert app._quitting is True
     assert app.live.stopped == 1 and app.live.waited == 1
     assert app.conference.stopped == 1 and app.conference.waited == 1
-    assert app.meeting.stopped == 1 and app.meeting.waited == 1
     assert app.history.closed is True
     assert app.tray.stopped is True
 
@@ -561,7 +506,6 @@ def _run_all() -> None:
     test_copy_last(tmp)
     test_live_lifecycle(tmp)
     test_conference_lifecycle(tmp)
-    test_meeting_guards_and_lifecycle(tmp)
     test_validated_combo()
     test_spawn_worker_failure(tmp)
     test_monitor_silence(tmp)

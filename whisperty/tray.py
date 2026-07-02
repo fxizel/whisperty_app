@@ -18,7 +18,6 @@ class TrayState(Enum):
     PROCESSING = "processing"
     LIVE = "live"
     CONFERENCE = "conference"
-    MEETING = "meeting"
 
 
 _COLORS = {
@@ -27,7 +26,6 @@ _COLORS = {
     TrayState.PROCESSING: (230, 150, 30),  # orange : transcription
     TrayState.LIVE: (40, 90, 220),         # bleu : transcription live (sortie audio)
     TrayState.CONFERENCE: (30, 170, 120),  # vert : réunion (micro + sortie)
-    TrayState.MEETING: (90, 40, 180),      # violet : assistant de réunion
 }
 _TITLES = {
     TrayState.IDLE: "Whisperty — prêt",
@@ -35,7 +33,6 @@ _TITLES = {
     TrayState.PROCESSING: "Whisperty — transcription…",
     TrayState.LIVE: "Whisperty — transcription live…",
     TrayState.CONFERENCE: "Whisperty — réunion en cours…",
-    TrayState.MEETING: "Whisperty — assistant de réunion…",
 }
 
 
@@ -90,8 +87,6 @@ class Tray:
         on_open_history: Optional[Callable[[], None]] = None,
         on_start_live: Optional[Callable[[Optional[object]], None]] = None,
         on_stop_live: Optional[Callable[[], None]] = None,
-        on_start_meeting: Optional[Callable[[Optional[object]], None]] = None,
-        on_stop_meeting: Optional[Callable[[], None]] = None,
         live_devices: Optional[list[dict]] = None,
         on_start_conference: Optional[Callable[[Optional[object]], None]] = None,
         on_stop_conference: Optional[Callable[[], None]] = None,
@@ -130,13 +125,6 @@ class Tray:
                     "Arrêter la réunion",
                 ),
                 enabled=on_start_conference is not None,
-            ),
-            MenuItem(
-                "Assistant de réunion (réponses auto)",
-                self._build_meeting_submenu(
-                    Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices
-                ),
-                enabled=on_start_meeting is not None,
             ),
             MenuItem(
                 "Importer un fichier audio…",
@@ -191,14 +179,6 @@ class Tray:
             )
         )
         return Menu(*items)
-
-    @classmethod
-    def _build_meeting_submenu(cls, Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices):
-        """Sous-menu de l'assistant de réunion : même structure que la capture de sortie."""
-        return cls._build_capture_submenu(
-            Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices,
-            "Arrêter l'assistant de réunion",
-        )
 
     def notify(self, message: str, title: str = "Whisperty") -> None:
         """Affiche une notification système (best-effort selon le backend pystray)."""

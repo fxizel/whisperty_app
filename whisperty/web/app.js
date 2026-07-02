@@ -239,12 +239,11 @@ function renderModeDesc() {
 }
 
 // États « en cours » (capture active) et leurs libellés.
-const RUNNING = ["recording", "live", "conference", "meeting"];
+const RUNNING = ["recording", "live", "conference"];
 const RUN_LABEL = {
   recording:  "Enregistrement en cours",
   live:       "Live en cours",
   conference: "Réunion en cours",
-  meeting:    "Assistant de réunion",
 };
 
 // État transitoire « Arrêt en cours… » : l'arrêt d'un live/réunion/dictée n'est pas

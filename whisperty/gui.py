@@ -173,8 +173,6 @@ class GuiApi:
                 self._app.stop_live()
             elif state is TrayState.CONFERENCE:
                 self._app.stop_conference()
-            elif state is TrayState.MEETING:
-                self._app.stop_meeting()
             # PROCESSING : ignoré (transcription/chargement en cours).
         except Exception:  # noqa: BLE001
             logger.exception("toggle_record a échoué")

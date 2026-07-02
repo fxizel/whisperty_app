@@ -171,7 +171,7 @@ def test_tray_states() -> None:
 
     # notify() est best-effort : la doublure d'icône n'a pas notify() → avalé sans lever.
     tray.notify("message de test")
-    print("[comp 5] tray : 6 états (couleur/titre/icône) + notify best-effort  OK")
+    print("[comp 5] tray : 5 états (couleur/titre/icône) + notify best-effort  OK")
 
 
 def test_tray_capture_submenu() -> None:
@@ -213,34 +213,6 @@ def test_tray_capture_submenu() -> None:
     items[-1].action(None, None)
     assert stopped == [1]
     print("[comp 6] tray : sous-menu capture câble les bonnes specs (None/index)  OK")
-
-
-def test_tray_meeting_submenu() -> None:
-    from whisperty.tray import Tray
-
-    class FakeMenuItem:
-        def __init__(self, text=None, action=None, **kw):
-            self.text = text
-            self.action = action
-
-    class FakeMenu:
-        SEPARATOR = object()
-
-        def __init__(self, *items):
-            self.items = items
-
-    started: list = []
-    stopped: list = []
-    devices = [{"name": "HDMI", "index": 3, "is_default": False}]
-    menu = Tray._build_meeting_submenu(
-        FakeMenu, FakeMenuItem, started.append, lambda: stopped.append(1), devices
-    )
-    items = [it for it in menu.items if isinstance(it, FakeMenuItem)]
-    items[0].action(None, None)   # défaut → None
-    items[1].action(None, None)   # HDMI → 3
-    items[-1].action(None, None)  # arrêt
-    assert started == [None, 3] and stopped == [1]
-    print("[comp 7] tray : sous-menu assistant réunion câble les bonnes specs  OK")
 
 
 # =============================================================================
@@ -315,7 +287,6 @@ def _run_all() -> None:
     test_foreground_app()
     test_tray_states()
     test_tray_capture_submenu()
-    test_tray_meeting_submenu()
     test_setup_logging(tmp)
     test_pyinstaller_spec_keeps_tkinter_for_import_audio()
     print("\nTOUS LES TESTS COMPONENTS PASSENT")

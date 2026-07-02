@@ -33,9 +33,9 @@ transcription:
 hotkey:
   combo: "<ctrl>+<alt>+<space>"
 
-meeting:
-  reply_prompt: >-
-    Tu rédiges une réponse pour {user_name}.
+ai:
+  prompt: >-
+    Tu corriges une dictée.
     Reste concis.
 """
 
@@ -67,8 +67,8 @@ def test_configio_preserves_comments(tmp_path: Path) -> None:
     assert sum(1 for ln in after.splitlines() if ln.strip().startswith("#")) == n_comments
     vad_line = [ln for ln in after.splitlines() if "vad_threshold" in ln][0]
     assert "# seuil RMS" in vad_line
-    # Bloc multi-lignes (reply_prompt) intact.
-    assert "Tu rédiges une réponse pour {user_name}." in after
+    # Bloc multi-lignes (prompt) intact.
+    assert "Tu corriges une dictée." in after
     assert "Reste concis." in after
     print("[gui 1] configio : commentaires + inline + bloc multi-lignes préservés  OK")
 
@@ -107,15 +107,15 @@ def test_configio_multiline_block_scalar(tmp_path: Path) -> None:
     p = tmp_path / "config.yaml"
     p.write_text(_SAMPLE, encoding="utf-8")
     update_yaml_file(p, {
-        "meeting.reply_prompt": "Réponse courte et pro.",
+        "ai.prompt": "Correction courte et fidèle.",
         "transcription.model": "small",  # scalaire normal en même temps
     })
     text = p.read_text(encoding="utf-8")
     d = yaml.safe_load(text)  # ne doit pas lever
-    assert d["meeting"]["reply_prompt"] == "Réponse courte et pro."
+    assert d["ai"]["prompt"] == "Correction courte et fidèle."
     assert d["transcription"]["model"] == "small"
     # Les anciennes lignes de continuation du bloc ont disparu.
-    assert "Tu rédiges une réponse pour {user_name}." not in text
+    assert "Tu corriges une dictée." not in text
     assert "Reste concis." not in text
     print("[gui 4b] configio : remplacement d'un scalaire bloc (>-) sans orphelins  OK")
 

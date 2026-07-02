@@ -14,7 +14,7 @@
 |--------|-------------------------|
 | **Application active** | Cible de l'injection de texte (fenêtre Windows au premier plan). |
 | **Moteur Whisper** (faster-whisper) | Transcrit l'audio en texte, localement. |
-| **LLM local** | Raffine le texte / génère des réponses (Ollama, LM Studio…), localhost uniquement. |
+| **LLM local** | Raffine le texte (Ollama, LM Studio…), localhost uniquement. |
 | **Périphérique audio** | Micro (entrée) et/ou sortie système (loopback). |
 
 ## 2. Diagramme de cas d'utilisation
@@ -35,14 +35,13 @@ graph LR
       UC08[UC-08 Consulter / copier l'historique]
       UC09[UC-09 Transcrire une sortie en direct]
       UC10[UC-10 Transcrire une réunion]
-      UC11[UC-11 Assister la réunion]
       UC12[UC-12 Configurer l'application]
       UC13[UC-13 Packager / démarrage auto]
       UC14[UC-14 Obtenir le modèle initial]
       UC15[UC-15 Activer l'accélération GPU]
     end
 
-    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC11 & UC12
+    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12
     A --> UC12 & UC13 & UC14 & UC15
 
     UC01 -. include .-> UC02
@@ -51,7 +50,6 @@ graph LR
     UC01 -. extend .-> UC05
     UC01 -. extend .-> UC06
     UC07 -. extend .-> UC06
-    UC11 -. include .-> UC06
 ```
 
 > `include` = sous-fonction toujours exécutée ; `extend` = comportement optionnel/conditionnel.
@@ -70,10 +68,8 @@ stateDiagram-v2
     IDLE --> PROCESSING : import fichier (UC-07) / préchargement modèle
     IDLE --> LIVE : transcription live (UC-09)
     IDLE --> CONFERENCE : réunion (UC-10)
-    IDLE --> MEETING : assistant de réunion (UC-11)
     LIVE --> IDLE : arrêt (callback de fin)
     CONFERENCE --> IDLE : arrêt (callback de fin)
-    MEETING --> IDLE : arrêt (callback de fin)
 ```
 
 **Règle d'exclusivité (BR-01)** : tout déclenchement reçu dans un état autre que `IDLE` (pour
@@ -94,7 +90,6 @@ journalisé), jamais mis en file.
 | UC-08 | Consulter / copier l'historique | Utilisateur | S | P-02, P-05 |
 | UC-09 | Transcrire une sortie audio en direct (live) | Utilisateur | S | P-05 |
 | UC-10 | Transcrire une réunion (micro + sortie) | Utilisateur | S | P-02, P-05 |
-| UC-11 | Assister la réunion (réponses suggérées) | Utilisateur | C | P-05 |
 | UC-12 | Configurer l'application | Utilisateur / Admin | M | P-06 |
 | UC-13 | Packager / activer le démarrage automatique | Administrateur | C | P-06 |
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
@@ -333,26 +328,6 @@ en une transcription continue sans étiquette de locuteur.
 
 ---
 
-### UC-11 — Assister la réunion (réponses suggérées)
-
-| Champ | Valeur |
-|-------|--------|
-| **Acteur principal** | Utilisateur |
-| **Acteur secondaire** | LLM local |
-| **Objectif** | Proposer une réponse rédigée quand une question est posée à l'utilisateur en réunion. |
-
-**Scénario nominal**
-1. Tray → « Assistant de réunion (réponses auto) » → choix de la sortie ; état `MEETING` (icône **violette**).
-2. Le système écoute la sortie audio, transcrit en continu, et détecte les **questions** adressées à l'utilisateur (`meeting.user_name`).
-3. Sur question détectée, un worker interroge le LLM local avec les `context_segments` récents et le `user_context`.
-4. La réponse est **copiée dans le presse-papiers** (`auto_inject: false`, recommandé) ou **injectée** dans l'app active (`auto_inject: true`). Chaque couple question/réponse est aussi **archivé** pendant la session (source = `réunion`).
-5. À l'arrêt, le **transcript complet** est copié et archivé (source = `réunion-transcript`).
-
-**Préconditions (bloquantes)** : `ai.enabled: true` **et** `meeting.user_name` renseigné — sinon refus avec notification explicite.
-**Exigences liées** : FR-14, CO-03, RE-06, BR-05.
-
----
-
 ### UC-12 — Configurer l'application
 
 | Champ | Valeur |
@@ -362,7 +337,7 @@ en une transcription continue sans étiquette de locuteur.
 
 **Scénario**
 1. Tray → « Ouvrir la configuration » ouvre `config.yaml`.
-2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference, meeting).
+2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference).
 3. **Relance** de l'application pour prise en compte.
 
 **Règle** : un seul fichier `config.yaml` abondamment commenté fait foi ; le dictionnaire est dans `dictionary.txt`.

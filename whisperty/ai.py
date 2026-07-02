@@ -75,49 +75,6 @@ class LocalLLM:
         result = self._chat(self.cfg.prompt, text)
         return result if result else text
 
-    def meeting_is_question(
-        self, segment: str, user_name: str, context: list[str]
-    ) -> bool:
-        """Détermine via le LLM si le segment est une question posée à l'utilisateur."""
-        if not self.cfg.enabled or not segment.strip():
-            return False
-        name = user_name.strip() or "l'utilisateur"
-        prompt = (
-            "Tu analyses des transcriptions de réunion en français. "
-            f"Détermine si le DERNIER segment est une question posée DIRECTEMENT à {name} "
-            "(ou une variante de son prénom). Les questions générales à tout le groupe "
-            "ne comptent pas. Réponds UNIQUEMENT par OUI ou NON."
-        )
-        ctx = "\n".join(context[-10:]) if context else segment
-        user = f"Transcription récente :\n{ctx}\n\nDernier segment à analyser :\n{segment}"
-        answer = self._chat(prompt, user)
-        if not answer:
-            return False
-        normalized = answer.strip().upper()
-        return normalized.startswith("OUI")
-
-    def meeting_reply(
-        self,
-        question: str,
-        context: list[str],
-        user_context: str,
-        reply_prompt: str,
-        user_name: str = "",
-    ) -> str | None:
-        """Génère une réponse courte pour une question de réunion. None si échec."""
-        if not self.cfg.enabled or not question.strip():
-            return None
-        name = user_name.strip() or "l'utilisateur"
-        ctx_text = "\n".join(f"- {s}" for s in context[-15:]) if context else question
-        system = reply_prompt.format(
-            user_name=name,
-            user_context=user_context or "(non renseigné)",
-            context=ctx_text,
-            question=question,
-        )
-        user = f"Question : {question}"
-        return self._chat(system, user)
-
     def _chat(self, system: str, user: str) -> str | None:
         """Appel générique au LLM local. Renvoie None en cas d'échec (jamais d'exception)."""
         if not self.cfg.enabled:
