@@ -192,25 +192,13 @@ class Tray:
         )
         return Menu(*items)
 
-    @staticmethod
-    def _build_meeting_submenu(Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices):
-        """Sous-menu de l'assistant de réunion : choix de la sortie + arrêt."""
-        def start_with(spec):
-            return lambda icon, item: on_start_meeting(spec) if on_start_meeting else None
-
-        items = [MenuItem("Démarrer — sortie par défaut", start_with(None))]
-        for dev in (live_devices or []):
-            label = dev["name"] + (" (défaut)" if dev.get("is_default") else "")
-            items.append(MenuItem(label, start_with(dev["index"])))
-        items.append(Menu.SEPARATOR)
-        items.append(
-            MenuItem(
-                "Arrêter l'assistant de réunion",
-                lambda icon, item: on_stop_meeting() if on_stop_meeting else None,
-                enabled=on_stop_meeting is not None,
-            )
+    @classmethod
+    def _build_meeting_submenu(cls, Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices):
+        """Sous-menu de l'assistant de réunion : même structure que la capture de sortie."""
+        return cls._build_capture_submenu(
+            Menu, MenuItem, on_start_meeting, on_stop_meeting, live_devices,
+            "Arrêter l'assistant de réunion",
         )
-        return Menu(*items)
 
     def notify(self, message: str, title: str = "Whisperty") -> None:
         """Affiche une notification système (best-effort selon le backend pystray)."""

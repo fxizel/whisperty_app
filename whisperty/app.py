@@ -14,6 +14,7 @@ handler réseau.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -35,6 +36,11 @@ from .winutil import foreground_app
 
 logger = logging.getLogger("whisperty")
 
+# Nombre max de lignes conservées dans le flux live AFFICHÉ (tuile « Transcription en
+# direct »). Borne la RAM et le payload get_live_text sur une très longue session ;
+# le transcript fichier et l'historique, eux, conservent l'intégralité du texte.
+_LIVE_DISPLAY_MAX_LINES = 400
+
 
 def setup_logging(config: Config) -> None:
     """Configure une journalisation locale (console + fichier). Aucun envoi réseau."""
@@ -46,7 +52,13 @@ def setup_logging(config: Config) -> None:
     try:
         log_path = config.resolve(config.logging.path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+        # Rotation locale (stdlib) : l'app tourne en permanence, un FileHandler simple
+        # croîtrait sans borne. 1 Mo × 3 sauvegardes ≈ plusieurs semaines de diagnostic.
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+            )
+        )
     except OSError as exc:
         logging.getLogger(__name__).warning("Fichier de log indisponible : %s", exc)
     logging.basicConfig(
@@ -368,6 +380,8 @@ class WhispertyApp:
             return
         with self._live_lock:
             self._live_lines.append(display)
+            if len(self._live_lines) > _LIVE_DISPLAY_MAX_LINES:
+                del self._live_lines[: -_LIVE_DISPLAY_MAX_LINES]
             self._live_rev += 1
 
     def _on_live_segment(self, _stamp: str, text: str) -> None:
@@ -771,7 +785,7 @@ class WhispertyApp:
     def _reload_model(self) -> None:
         """Force le rechargement du modèle (taille/device/hors-ligne modifiés)."""
         try:
-            self.transcriber._model = None  # rechargement paresseux au prochain usage
+            self.transcriber.reset()  # rechargement paresseux au prochain usage
         except Exception:  # noqa: BLE001
             logger.exception("Réinitialisation du modèle échouée")
             return

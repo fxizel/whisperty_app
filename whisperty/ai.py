@@ -165,6 +165,8 @@ class LocalLLM:
                 "LLM local injoignable (%s) ; vérifiez que le serveur tourne sur %s.",
                 exc, endpoint,
             )
-        except (KeyError, ValueError, json.JSONDecodeError):
+        # IndexError : "choices" vide ; TypeError/AttributeError : nœud non-dict (serveur
+        # local non conforme). Contrat de la méthode : ne JAMAIS lever (texte brut conservé).
+        except (KeyError, IndexError, TypeError, AttributeError, ValueError, json.JSONDecodeError):
             logger.warning("Réponse IA inattendue.", exc_info=True)
         return None

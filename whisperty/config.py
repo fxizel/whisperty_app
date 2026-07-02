@@ -211,8 +211,26 @@ class Config:
                     data = yaml.safe_load(fh) or {}
             except (OSError, yaml.YAMLError) as exc:
                 logger.warning("Lecture de %s impossible (%s) ; défauts utilisés.", p, exc)
+            # Un YAML valide peut ne pas être un mapping (liste, chaîne…) : data.get()
+            # planterait au démarrage. Doctrine du module : avertir et retomber sur les défauts.
+            if not isinstance(data, dict):
+                logger.warning(
+                    "%s ne contient pas un mapping YAML (%s) ; défauts utilisés.",
+                    p, type(data).__name__,
+                )
+                data = {}
         else:
             logger.info("Aucun %s ; configuration par défaut.", p)
+
+        # Sections de premier niveau inconnues (typo « hotkeys: »…) : signalées, comme le
+        # sont déjà les clés inconnues À L'INTÉRIEUR d'une section (cf. _build).
+        known_sections = {f.name for f in fields(cls)} - {"base_dir"}
+        unknown_sections = set(data) - known_sections
+        if unknown_sections:
+            logger.warning(
+                "Sections de configuration inconnues ignorées : %s",
+                ", ".join(sorted(unknown_sections)),
+            )
 
         cfg = cls(
             audio=_build(AudioConfig, data.get("audio")),

@@ -233,6 +233,64 @@ def test_stop_when_idle_returns_empty() -> None:
     print("[recorder 6] stop() au repos : tableau vide  OK")
 
 
+def test_start_invalid_device_raises_microphone_error() -> None:
+    """Périphérique inexistant (nom/index erroné) : sounddevice lève ValueError, qui doit
+    être convertie en MicrophoneError — sinon elle remonterait dans le thread écouteur
+    pynput et tuerait le raccourci global."""
+    from whisperty.recorder import AudioRecorder, MicrophoneError
+
+    fake = _make_fake_sd()
+
+    def _invalid(*a, **k):
+        raise ValueError("No input device matching 'micro fantôme'")
+
+    fake.check_input_settings = _invalid
+    fake.query_devices = _invalid
+    recorder, previous = _with_fake_sd(fake)
+    try:
+        rec = AudioRecorder(device="micro fantôme")
+        raised = False
+        try:
+            rec.start()
+        except MicrophoneError:
+            raised = True
+        assert raised, "MicrophoneError attendue pour un périphérique invalide"
+        assert rec._stream is None and not rec.is_recording
+    finally:
+        recorder.sd = previous
+    print("[recorder 6b] start : device invalide (ValueError) -> MicrophoneError  OK")
+
+
+def test_stop_failure_resets_state() -> None:
+    """Si l'arrêt PortAudio lève (périphérique débranché), l'état doit être réinitialisé :
+    sinon tous les start() suivants seraient refusés (« déjà en cours ») jusqu'au
+    redémarrage de l'application. Les frames déjà captées sont conservées."""
+    from whisperty.recorder import AudioRecorder
+
+    recorder, previous = _with_fake_sd(_make_fake_sd())
+    try:
+        rec = AudioRecorder(samplerate=16_000)
+        rec.start()
+        rec._callback(np.full((40, 1), 0.25, np.float32), 40, None, None)
+
+        def boom():
+            raise RuntimeError("périphérique débranché")
+
+        rec._stream.stop = boom  # l'arrêt du flux échoue
+        audio = rec.stop()       # ne lève pas ; frames conservées
+        assert audio.size == 40 and np.allclose(audio, 0.25)
+        assert not rec.is_recording and rec._stream is None
+
+        # L'enregistreur reste utilisable : un nouveau cycle start/stop fonctionne.
+        rec.start()
+        assert rec.is_recording
+        rec._callback(np.full((10, 1), 0.1, np.float32), 10, None, None)
+        assert rec.stop().size == 10
+    finally:
+        recorder.sd = previous
+    print("[recorder 6c] stop : échec d'arrêt -> état réinitialisé, frames conservées  OK")
+
+
 # =============================================================================
 # 4) is_silent + écriture WAV 16 bits PCM
 # =============================================================================
@@ -349,6 +407,8 @@ def _run_all() -> None:
     test_start_native_rate_then_resample()
     test_start_failure_raises_microphone_error()
     test_stop_when_idle_returns_empty()
+    test_start_invalid_device_raises_microphone_error()
+    test_stop_failure_resets_state()
     test_is_silent_and_save_wav(tmp)
     test_record_until_silence_max_duration()
     test_record_until_silence_on_silence()

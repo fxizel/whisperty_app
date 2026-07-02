@@ -187,6 +187,14 @@ class GuiApi:
         except Exception:  # noqa: BLE001
             last = ""
         c = self._app.config
+        # Device RÉEL du dernier chargement (repli gracieux CUDA→CPU possible) plutôt que
+        # le device configuré : la barre latérale ne doit pas afficher « CUDA » quand la
+        # transcription tourne en fait sur le CPU. Repli sur la config tant que le modèle
+        # n'a pas été chargé.
+        try:
+            device = self._app.transcriber.effective_device
+        except Exception:  # noqa: BLE001
+            device = None
         return {
             "lastText": last,
             "statsWords": words,
@@ -194,7 +202,7 @@ class GuiApi:
             "statsTrans": trans,
             "combo": c.hotkey.combo,
             "model": c.transcription.model,
-            "device": (c.transcription.device or "cpu").upper(),
+            "device": (device or c.transcription.device or "cpu").upper(),
         }
 
     def _today_stats(self) -> tuple[int, int, int]:
@@ -204,7 +212,10 @@ class GuiApi:
         à partir du nombre de mots (~150 mots/min de parole). L'écran l'indique.
         """
         try:
-            entries = self._app.history.recent(500)
+            # Assez large pour couvrir la journée même si l'utilisateur a relevé la
+            # borne de rétention au-delà de 500 entrées.
+            limit = max(500, int(self._app.config.history.max_entries or 0))
+            entries = self._app.history.recent(limit)
         except Exception:  # noqa: BLE001
             return 0, 0, 0
         today = datetime.now().strftime("%Y-%m-%d")

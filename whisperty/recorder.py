@@ -211,7 +211,10 @@ class AudioRecorder:
             try:
                 self._stream = self._open_stream()
                 self._stream.start()
-            except sd.PortAudioError as exc:
+            # ValueError : périphérique inexistant (nom/index erroné dans config.yaml) —
+            # sounddevice le lève au lieu de PortAudioError. Sans conversion, l'exception
+            # remonterait dans le thread écouteur pynput et tuerait le raccourci global.
+            except (sd.PortAudioError, ValueError) as exc:
                 # Fermer le flux éventuellement ouvert avant d'échouer (pas de fuite).
                 if self._stream is not None:
                     try:
@@ -236,10 +239,19 @@ class AudioRecorder:
         with self._op_lock:
             if not self._recording:
                 return np.zeros(0, dtype=np.float32)
+            # L'état est réinitialisé QUOI QU'IL ARRIVE : si stop()/close() lève
+            # (périphérique débranché…), laisser _recording=True bloquerait tous les
+            # start() suivants (« déjà en cours ») jusqu'au redémarrage de l'application.
             if self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
+                try:
+                    self._stream.stop()
+                except Exception:  # noqa: BLE001 — on garde les frames déjà captées
+                    logger.exception("Arrêt du flux audio échoué ; état réinitialisé.")
+                try:
+                    self._stream.close()  # tenté même si stop() a échoué (pas de fuite)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Fermeture du flux audio échouée.")
+            self._stream = None
             self._recording = False
             # Le callback ne tourne plus après stream.stop() : lecture des frames sûre.
             frames = self._frames

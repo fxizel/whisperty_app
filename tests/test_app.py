@@ -516,6 +516,39 @@ def test_quit(tmp_path: Path) -> None:
     print("[app 15] quit : arrêt ordonné de tous les sous-systèmes + idempotence  OK")
 
 
+# =============================================================================
+# 12) Flux live affiché : accumulation, révision monotone, borne mémoire
+# =============================================================================
+def test_live_display_buffer_capped(tmp_path: Path) -> None:
+    from whisperty.app import _LIVE_DISPLAY_MAX_LINES
+
+    app, _ = _make_app(tmp_path)
+    rev0 = app.live_rev()
+    app._append_live_line("premier segment")
+    assert app.live_rev() == rev0 + 1
+    assert app.live_transcript()["text"] == "premier segment"
+    # Lignes vides/blanches ignorées (pas de bump de révision inutile).
+    app._append_live_line("   ")
+    assert app.live_rev() == rev0 + 1
+
+    # Très longue session : l'affichage est borné aux N dernières lignes (la RAM et le
+    # payload get_live_text restent constants ; transcript fichier/historique complets).
+    for i in range(_LIVE_DISPLAY_MAX_LINES + 50):
+        app._append_live_line(f"segment {i}")
+    text = app.live_transcript()["text"]
+    lines = text.splitlines()
+    assert len(lines) == _LIVE_DISPLAY_MAX_LINES
+    assert lines[-1] == f"segment {_LIVE_DISPLAY_MAX_LINES + 49}"  # les plus récentes
+    assert "premier segment" not in lines                          # les plus anciennes évincées
+
+    # Reset (nouveau live/réunion) : flux vidé + révision bumpée (re-fetch JS forcé).
+    rev_before = app.live_rev()
+    app._reset_live_transcript()
+    assert app.live_rev() == rev_before + 1
+    assert app.live_transcript()["text"] == ""
+    print("[app 16] flux live affiché : accumulation + borne mémoire + reset  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -535,6 +568,7 @@ def _run_all() -> None:
     test_monitor_max_duration(tmp)
     test_preload(tmp)
     test_quit(tmp)
+    test_live_display_buffer_capped(tmp)
     print("\nTOUS LES TESTS APP PASSENT")
 
 

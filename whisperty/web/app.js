@@ -176,7 +176,7 @@ function comboToKeys(combo) {
 
 function renderKeys(container, combo) {
   const keys = comboToKeys(combo);
-  container.innerHTML = keys.map(k => `<span class="kbd">${k}</span>`).join('<span class="kbd-plus">+</span>');
+  container.innerHTML = keys.map(k => `<span class="kbd">${escapeHtml(k)}</span>`).join('<span class="kbd-plus">+</span>');
 }
 
 // Convertit un évènement clavier (capture) en combo format pynput.
@@ -459,8 +459,9 @@ async function loadConfig() {
 
   // Micros
   const mics = c.mics || (await call("list_microphones"));
+  // Libellés échappés : les noms de périphériques viennent du matériel (cf. loadSources).
   $("#cfg-mic").innerHTML = mics.map(m =>
-    `<option value="${m.value === null ? "" : m.value}">${m.label}</option>`
+    `<option value="${m.value === null ? "" : m.value}">${escapeHtml(m.label)}</option>`
   ).join("");
   $("#cfg-mic").value = c.mic === null || c.mic === undefined ? "" : String(c.mic);
 

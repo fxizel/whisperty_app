@@ -266,7 +266,10 @@ class ConferenceTranscriber:
         if b.ndim > 1:
             b = b.mean(axis=1)
         b = np.asarray(b, dtype=np.float32).reshape(-1)
-        rate = self._mic_recorder.capture_rate if self._mic_recorder is not None else SAMPLE_RATE
+        # Référence locale : _stop_mic (autre thread) peut nuller _mic_recorder entre le
+        # test et la lecture de capture_rate — la capture évite l'AttributeError.
+        recorder = self._mic_recorder
+        rate = recorder.capture_rate if recorder is not None else SAMPLE_RATE
         if rate != SAMPLE_RATE:
             b = _resample(b, rate, SAMPLE_RATE)
         self._buffers["mic"].push(b)

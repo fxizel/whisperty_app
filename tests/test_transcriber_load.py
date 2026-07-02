@@ -123,10 +123,103 @@ def test_load_offline_env_and_idempotent() -> None:
     print("[trans-load 3] local_files_only -> env HF hors-ligne + idempotence  OK")
 
 
+# =============================================================================
+# 4) reset() : invalide le modèle, rechargé paresseusement au prochain usage
+# =============================================================================
+def test_reset_reloads_lazily() -> None:
+    from whisperty.config import TranscriptionConfig
+    from whisperty.transcriber import Transcriber
+
+    calls: list[str] = []
+
+    class FakeModel:
+        def __init__(self, model, **kw):
+            calls.append(model)
+
+    t = Transcriber(TranscriptionConfig(model="small", local_files_only=False))
+    previous = _install_fake_faster_whisper(FakeModel)
+    try:
+        t.load()
+        assert t.is_loaded and t.effective_device == "cpu"
+        t.reset()
+        # Invalidé : rechargement paresseux (pas immédiat), device effectif oublié.
+        assert not t.is_loaded and t.effective_device is None
+        t.load()
+        assert t.is_loaded and len(calls) == 2
+    finally:
+        _restore(previous)
+    print("[trans-load 4] reset() -> modèle invalidé puis rechargé paresseusement  OK")
+
+
+# =============================================================================
+# 5) local_files_only=False : les variables hors-ligne posées PAR NOUS sont retirées
+#    (sinon décocher « localOnly » dans l'UI resterait sans effet jusqu'au redémarrage)
+# =============================================================================
+def test_offline_env_removed_when_online() -> None:
+    import types as _types
+
+    from whisperty import transcriber as tr
+    from whisperty.config import TranscriptionConfig
+    from whisperty.transcriber import Transcriber
+
+    class FakeModel:
+        def __init__(self, model, **kw):
+            pass
+
+    saved_env = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
+    for k in saved_env:
+        os.environ.pop(k, None)
+    saved_set = set(tr._offline_env_set)
+    tr._offline_env_set.clear()
+    # Doublure huggingface_hub : la constante figée à l'import doit être resynchronisée.
+    fake_hub = _types.ModuleType("huggingface_hub")
+    fake_hub.constants = _types.SimpleNamespace(HF_HUB_OFFLINE=False)
+    saved_hub = sys.modules.get("huggingface_hub")
+    sys.modules["huggingface_hub"] = fake_hub
+    previous = _install_fake_faster_whisper(FakeModel)
+    try:
+        cfg = TranscriptionConfig(model="small", local_files_only=True)
+        t = Transcriber(cfg)
+        t.load()
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+        assert fake_hub.constants.HF_HUB_OFFLINE is True
+
+        # L'utilisateur décoche « localOnly » puis recharge (écran Configuration).
+        cfg.local_files_only = False
+        t.reset()
+        t.load()
+        # Les variables posées par nous sont retirées ; la constante est resynchronisée.
+        assert os.environ.get("HF_HUB_OFFLINE") is None
+        assert os.environ.get("TRANSFORMERS_OFFLINE") is None
+        assert fake_hub.constants.HF_HUB_OFFLINE is False
+
+        # Une variable posée PAR L'UTILISATEUR n'est jamais retirée.
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        t.reset()
+        t.load()
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    finally:
+        _restore(previous)
+        if saved_hub is not None:
+            sys.modules["huggingface_hub"] = saved_hub
+        else:
+            sys.modules.pop("huggingface_hub", None)
+        tr._offline_env_set.clear()
+        tr._offline_env_set.update(saved_set)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("[trans-load 5] localOnly décoché -> env hors-ligne retiré (posé par nous seulement)  OK")
+
+
 def _run_all() -> None:
     test_load_library_missing()
     test_load_model_error()
     test_load_offline_env_and_idempotent()
+    test_reset_reloads_lazily()
+    test_offline_env_removed_when_online()
     print("\nTOUS LES TESTS TRANSCRIBER-LOAD PASSENT")
 
 

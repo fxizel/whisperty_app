@@ -13,6 +13,8 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -126,6 +128,45 @@ class ModelNotAvailableError(RuntimeError):
     """faster-whisper absent, modèle non téléchargé ou device indisponible."""
 
 
+# Variables d'environnement hors-ligne posées PAR NOUS (cf. _set_offline_env) : mémorisées
+# pour pouvoir les retirer si l'utilisateur désactive local_files_only à chaud — sans
+# toucher à des variables qu'il aurait définies lui-même.
+_offline_env_set: set[str] = set()
+_OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+
+
+def _set_offline_env(offline: bool) -> None:
+    """(Dé)pose les variables hors-ligne Hugging Face selon ``local_files_only``.
+
+    Défense en profondeur en mode hors-ligne : couper tout accès réseau de
+    huggingface_hub AVANT son import (sinon il vérifie la révision en ligne même si le
+    modèle est en cache). Réversible : si l'utilisateur décoche « localOnly » dans l'UI
+    puis recharge le modèle, on retire les variables QUE NOUS avons posées — sinon le
+    téléchargement resterait bloqué jusqu'au redémarrage. huggingface_hub fige ces
+    valeurs à l'import (constantes de module) : on resynchronise donc aussi le module
+    s'il est déjà chargé (best-effort, structure interne susceptible de changer).
+    """
+    if offline:
+        for var in _OFFLINE_ENV_VARS:
+            if var not in os.environ:
+                os.environ[var] = "1"
+                _offline_env_set.add(var)
+    else:
+        for var in list(_offline_env_set):
+            os.environ.pop(var, None)
+            _offline_env_set.discard(var)
+    hub = sys.modules.get("huggingface_hub")
+    if hub is not None:
+        try:
+            constants = hub.constants
+            env_val = os.environ.get("HF_HUB_OFFLINE", "").upper()
+            desired = offline or env_val in ("1", "ON", "YES", "TRUE")
+            if isinstance(getattr(constants, "HF_HUB_OFFLINE", None), bool):
+                constants.HF_HUB_OFFLINE = desired
+        except Exception:  # noqa: BLE001 — resynchronisation best-effort uniquement
+            logger.debug("Resynchronisation de huggingface_hub.constants impossible.", exc_info=True)
+
+
 class Transcriber:
     """Encapsule un ``WhisperModel`` faster-whisper + le post-traitement dictionnaire."""
 
@@ -144,6 +185,10 @@ class Transcriber:
         # résolution (le nom de taille « medium » est passé tel quel).
         self._base_dir = Path(base_dir) if base_dir is not None else None
         self._model = None  # chargement paresseux
+        # Sérialise load()/reset() : le préchargement (thread dédié) et une première
+        # transcription (worker) peuvent arriver en même temps — sans verrou, le modèle
+        # serait chargé DEUX fois en parallèle (pic mémoire, instance dupliquée).
+        self._load_lock = threading.Lock()
         # Device réellement utilisé au dernier chargement (peut différer de cfg.device en
         # cas de repli CUDA→CPU). None tant que le modèle n'a pas été chargé.
         self._effective_device: Optional[str] = None
@@ -185,15 +230,29 @@ class Transcriber:
         return self._model is not None
 
     def load(self) -> None:
-        """Charge le modèle en mémoire (idempotent). Peut être long au premier appel."""
-        if self._model is not None:
+        """Charge le modèle en mémoire (idempotent, thread-safe). Long au premier appel."""
+        if self._model is not None:  # chemin rapide sans verrou (référence déjà publiée)
             return
-        # Défense en profondeur : en mode hors-ligne, couper tout accès réseau de
-        # huggingface_hub AVANT son import (sinon il vérifie la révision en ligne
-        # même si le modèle est déjà en cache). Complète local_files_only.
-        if self.cfg.local_files_only:
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        with self._load_lock:
+            if self._model is None:
+                self._load_locked()
+
+    def reset(self) -> None:
+        """Invalide le modèle chargé : il sera rechargé paresseusement au prochain usage.
+
+        Utilisé par le rechargement de configuration à chaud (taille/device/hors-ligne
+        modifiés). Une transcription EN VOL n'est pas interrompue : ``_run`` capture sa
+        propre référence au modèle et termine sur l'ancienne instance.
+        """
+        with self._load_lock:
+            self._model = None
+            self._effective_device = None
+
+    def _load_locked(self) -> None:
+        """Cœur du chargement — à appeler avec ``_load_lock`` tenu et ``_model`` à None."""
+        # Défense en profondeur : (dé)pose les variables hors-ligne Hugging Face selon
+        # local_files_only, AVANT l'import (voir _set_offline_env — réversible à chaud).
+        _set_offline_env(self.cfg.local_files_only)
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
@@ -313,12 +372,27 @@ class Transcriber:
         hotwords = ", ".join(hotword_list) if hotword_list else None
         return initial_prompt, language, hotwords, replacements
 
+    def _ensure_model(self):
+        """Charge au besoin et renvoie une référence LOCALE au modèle.
+
+        La capture locale rend la transcription robuste à un ``reset()`` concurrent
+        (rechargement de config à chaud) : la dictée en vol termine sur l'ancienne
+        instance au lieu de planter sur ``self._model`` redevenu None.
+        """
+        self.load()
+        model = self._model
+        if model is None:  # reset() entre load() et la lecture : on recharge
+            with self._load_lock:
+                if self._model is None:
+                    self._load_locked()
+                model = self._model
+        return model
+
     def _run(self, audio, profile: Optional["ResolvedProfile"]) -> str:
         """Cœur commun (signal mémoire ou chemin fichier) : ASR + post-traitement → texte."""
-        self.load()
-        assert self._model is not None
+        model = self._ensure_model()
         initial_prompt, language, hotwords, replacements = self._resolve_params(profile)
-        segments, info = self._model.transcribe(
+        segments, info = model.transcribe(
             audio,
             language=language,
             beam_size=self.cfg.beam_size,
@@ -338,10 +412,9 @@ class Transcriber:
         self, audio, profile: Optional["ResolvedProfile"]
     ) -> list[tuple[float, float, str]]:
         """Variante horodatée : renvoie les segments (start, end, texte corrigé)."""
-        self.load()
-        assert self._model is not None
+        model = self._ensure_model()
         initial_prompt, language, hotwords, replacements = self._resolve_params(profile)
-        segments, _ = self._model.transcribe(
+        segments, _ = model.transcribe(
             audio,
             language=language,
             beam_size=self.cfg.beam_size,

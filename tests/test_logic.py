@@ -460,6 +460,14 @@ def test_ai_local_guard() -> None:
 
         ai_mod._OPENER = types.SimpleNamespace(open=fake_open_remote)
         assert llm.refine("secret") == "secret"
+
+        # Réponses malformées d'un serveur local non conforme : jamais d'exception,
+        # texte brut conservé ("choices" vide, nœud non-dict, message absent).
+        for payload in ({"choices": []}, {"choices": [None]}, {"choices": [{}]}):
+            ai_mod._OPENER = types.SimpleNamespace(
+                open=lambda req, timeout=None, p=payload: _FakeResp(p)
+            )
+            assert llm.refine("texte brut") == "texte brut"
     finally:
         ai_mod._OPENER = original
     print("[8] IA locale : garde localhost + URL finale locale + désactivé + réponse  OK")
@@ -619,6 +627,25 @@ def test_config_robustness(tmp_path: Path) -> None:
     assert loaded2.conference.enabled is False
     assert loaded2.history.enabled is True
     work2.unlink()
+
+    # Racine YAML non-mapping (liste/chaîne valides YAML) → défauts sûrs, pas de crash.
+    work3 = base / "tmp_non_mapping.yaml"
+    work3.write_text("- juste\n- une liste\n", encoding="utf-8")
+    loaded3 = Config.load(work3)
+    assert loaded3.transcription.model == "small"          # défauts intacts
+    assert loaded3.hotkey.combo == "<ctrl>+<alt>+<space>"
+    work3.unlink()
+
+    # Section de premier niveau inconnue (typo « hotkeys: ») → ignorée sans crash,
+    # les sections valides du même fichier restent prises en compte.
+    work4 = base / "tmp_unknown_section.yaml"
+    work4.write_text(
+        "hotkeys:\n  combo: typo\naudio:\n  max_duration: 30\n", encoding="utf-8"
+    )
+    loaded4 = Config.load(work4)
+    assert loaded4.hotkey.combo == "<ctrl>+<alt>+<space>"  # la typo n'écrase rien
+    assert loaded4.audio.max_duration == 30.0
+    work4.unlink()
     print("[10] robustesse config : profils/numeriques/booleens malformes -> defauts surs  OK")
 
 

@@ -47,7 +47,7 @@ def load_dictionary(path: Union[str, Path]) -> tuple[list[str], dict[str, str]]:
 
 
 def apply_corrections(text: str, replacements: dict[str, str]) -> str:
-    """Applique les corriges ``mauvais => correct`` sur des mots entiers (insensible à la casse)."""
+    """Applique les corrections ``mauvais => correct`` sur des mots entiers (insensible à la casse)."""
     if not replacements or not text:
         return text
     # Tri par longueur décroissante : les expressions multi-mots priment sur les mots seuls.

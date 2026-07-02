@@ -8,6 +8,7 @@ from typing import Optional, Sequence
 
 from .app import WhispertyApp, setup_logging
 from .config import Config
+from .version import __version__
 
 
 def _default_config_path() -> str:
@@ -36,7 +37,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s " + __import__("whisperty").__version__,
+        version="%(prog)s " + __version__,
     )
     args = parser.parse_args(argv)
 
