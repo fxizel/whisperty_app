@@ -6,6 +6,7 @@ aucun presse-papiers réel, aucun accès réseau.
 """
 from __future__ import annotations
 
+import ast
 import logging
 import logging.handlers
 import sys
@@ -283,6 +284,27 @@ def test_setup_logging(tmp_path: Path) -> None:
     print("[comp 8] setup_logging : dossier local créé + aucun handler réseau  OK")
 
 
+# =============================================================================
+# 5) Packaging : l'import audio a besoin de tkinter dans le build fige
+# =============================================================================
+def test_pyinstaller_spec_keeps_tkinter_for_import_audio() -> None:
+    """Le menu d'import audio utilise tkinter ; le spec ne doit pas l'exclure."""
+    spec = Path(__file__).resolve().parent.parent / "whisperty.spec"
+    tree = ast.parse(spec.read_text(encoding="utf-8"), filename=str(spec))
+    excludes: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Analysis":
+            for keyword in node.keywords:
+                if keyword.arg == "excludes" and isinstance(keyword.value, ast.List):
+                    excludes = [
+                        elt.value for elt in keyword.value.elts
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                    ]
+                    break
+    assert "tkinter" not in excludes
+    print("[comp 9] packaging : tkinter non exclu (import audio fige)  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -295,6 +317,7 @@ def _run_all() -> None:
     test_tray_capture_submenu()
     test_tray_meeting_submenu()
     test_setup_logging(tmp)
+    test_pyinstaller_spec_keeps_tkinter_for_import_audio()
     print("\nTOUS LES TESTS COMPONENTS PASSENT")
 
 
