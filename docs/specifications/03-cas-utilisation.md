@@ -35,6 +35,7 @@ graph LR
       UC08[UC-08 Consulter / copier l'historique]
       UC09[UC-09 Transcrire une sortie en direct]
       UC10[UC-10 Transcrire une réunion]
+      UC18[UC-18 Distinguer les locuteurs individuels]
       UC12[UC-12 Configurer l'application]
       UC13[UC-13 Packager / démarrage auto]
       UC14[UC-14 Obtenir le modèle initial]
@@ -54,8 +55,10 @@ graph LR
     UC07 -. extend .-> UC06
     UC09 -. extend .-> UC16
     UC10 -. extend .-> UC16
+    UC10 -. extend .-> UC18
     UC09 -. extend .-> UC17
     UC10 -. extend .-> UC17
+    UC18 -. extend .-> UC17
 ```
 
 > `include` = sous-fonction toujours exécutée ; `extend` = comportement optionnel/conditionnel.
@@ -96,6 +99,7 @@ journalisé), jamais mis en file.
 | UC-08 | Consulter / copier l'historique | Utilisateur | S | P-02, P-05 |
 | UC-09 | Transcrire une sortie audio en direct (live) | Utilisateur | S | P-05 |
 | UC-10 | Transcrire une réunion (micro + sortie) | Utilisateur | S | P-02, P-05 |
+| UC-18 | Distinguer les locuteurs individuels en réunion | Utilisateur | C | P-02, P-05 |
 | UC-12 | Configurer l'application | Utilisateur / Admin | M | P-06 |
 | UC-13 | Packager / activer le démarrage automatique | Administrateur | C | P-06 |
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
@@ -332,7 +336,57 @@ en une transcription continue sans étiquette de locuteur.
 - *Fenêtre fermée / mode tray seul* : capture, export et archivage **inchangés** (l'affichage en direct est un confort, non bloquant).
 
 **Préconditions** : `conference.enabled: true` ; `soundcard` ; **consentement** des participants (BR-05).
+**Extensions**
+- *Distinction individuelle des orateurs* (UC-18) : au-delà de `Moi`/`Interlocuteurs`, chaque voix
+  est identifiée séparément sur le micro **et** sur la sortie système, puis entrelacée chronologiquement.
 **Exigences liées** : FR-13, US-09, RE-08, RE-09, CO-04, CO-05, BR-05.
+
+---
+
+### UC-18 — Distinguer les locuteurs individuels en réunion
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur |
+| **Acteurs secondaires** | Moteur Whisper, module de diarisation locale |
+| **Objectif** | Identifier **chaque orateur** dans le compte rendu de réunion — qu'il parle au micro local (plusieurs personnes en salle) ou via la sortie système (plusieurs participants distants) — et non plus seulement la source audio (`Moi` / `Interlocuteurs`). |
+| **Déclencheur** | Activation de `conference.speaker_diarization.enabled: true` (ou équivalent UI) avant ou pendant une session UC-10. |
+| **Préconditions** | UC-10 actif ou sur le point de démarrer ; modèle de diarisation **téléchargé et en cache local** (opt-in, analogue UC-14) ; **consentement** des participants (BR-05). |
+| **Garanties (succès)** | Le transcript exporté et le flux en direct affichent des lignes horodatées du type `[MM:SS] Locuteur N : …` (ou libellé personnalisé), entrelacées chronologiquement quelle que soit la provenance du son. |
+| **Garanties minimales** | Si la diarisation échoue ou est indisponible, la session se poursuit avec la distinction par source (UC-10, itération 2) ; aucune perte d'audio ni d'arrêt de capture. |
+
+> UC-18 **étend** UC-10 : il ne crée pas de nouvel état dans la machine à états (§3) et
+> s'exécute pendant `CONFERENCE`. Il ne s'applique pas au mode live seul (UC-09).
+
+**Scénario nominal (réunion hybride)**
+1. L'utilisateur active la diarisation des locuteurs (`speaker_diarization.enabled: true`) et lance une réunion (UC-10).
+2. Le micro local capture les voix **en salle** ; la sortie système capture les voix **à distance** (Teams, Meet…).
+3. Chaque source est segmentée et transcrite comme en UC-10 ; en parallèle, un **worker dédié** applique la diarisation sur les segments de chaque source (empreintes vocales locales, sans réseau).
+4. Les segments sont étiquetés par locuteur (`Locuteur 1`, `Locuteur 2`, … — numérotation stable sur la session) et **fusionnés chronologiquement** avec les segments des deux sources.
+5. (Si fenêtre ouverte) le flux en direct affiche chaque ligne avec le libellé du locuteur (US-09, US-11).
+6. À l'arrêt, l'export et l'historique reprennent le transcript entrelacé avec les étiquettes de locuteur.
+
+**Variantes**
+- *Plusieurs personnes au micro* : deux collègues en salle partagent le même micro → la diarisation les distingue (`Locuteur 1` / `Locuteur 2` sur la branche micro).
+- *Plusieurs participants distants* : trois intervenants à l'écran → la diarisation les distingue sur la branche sortie système (`Locuteur 3` / `Locuteur 4` / `Locuteur 5`).
+- *Mélange présentiel + distanciel* : les locuteurs micro et distants apparaissent dans **un seul fil chronologique** ; l'étiquette ne révèle pas la source technique, seulement l'identité vocale.
+- *Renommage des locuteurs* : depuis la fenêtre, l'utilisateur remplace `Locuteur 2` par « Marie Dupont » ; le renommage s'applique rétroactivement au transcript de la session (flux, export, historique).
+- *Nombre maximal de locuteurs* : `speaker_diarization.max_speakers` borne la détection (défaut documenté) pour limiter les faux positifs en salle bruyante.
+
+**Extensions / exceptions**
+- *Modèle de diarisation absent* : proposition de téléchargement **explicite** (unique appel réseau, comme UC-14) ; refus → repli sur distinction par source (UC-10).
+- *Diarisation indisponible en exe figé* : repli gracieux sur UC-10, message journalisé.
+- *Locuteur non distingué* (voix trop proches, chevauchement) : le segment est attribué au locuteur le plus probable ou regroupé sous un libellé générique (`Locuteur ?`), sans bloquer la transcription.
+- *Échec du worker de diarisation* : la capture et la transcription Whisper continuent ; les segments déjà diarisés sont conservés, les suivants retombent sur l'étiquette de source (`Moi` / `Interlocuteurs`).
+- *Fenêtre fermée* : diarisation, export et archivage **inchangés** (affichage en direct = confort).
+
+**Hors périmètre (Won't, cette itération)**
+- Identification nominative automatique (reconnaissance du nom prononcé ou annuaire) — seul le renommage manuel est prévu.
+- Diarisation en mode live seul (UC-09) — une seule source, hors périmètre conférence.
+- Envoi d'empreintes vocales ou d'audio vers un service distant — interdit (CO-01, CO-17).
+
+**Règles** : BR-05 (consentement), BR-06 (pas d'injection), BR-08 (continuité de session en cas d'échec diarisation).
+**Exigences liées** : FR-29…FR-32, US-11, US-12, RE-13, RE-14, PE-07, CO-17, CO-18, CO-19.
 
 ---
 
@@ -345,7 +399,7 @@ en une transcription continue sans étiquette de locuteur.
 
 **Scénario**
 1. Tray → « Ouvrir la configuration » ouvre `config.yaml`.
-2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference).
+2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference — dont `speaker_diarization` pour UC-18).
 3. **Relance** de l'application pour prise en compte.
 
 **Règle** : un seul fichier `config.yaml` abondamment commenté fait foi ; le dictionnaire est dans `dictionary.txt`.
@@ -427,7 +481,7 @@ en une transcription continue sans étiquette de locuteur.
 **Extensions / exceptions**
 - *1a. Note vide* (texte vide ou blanc) : ignorée silencieusement, pas d'erreur.
 - *4a. Transcript non inscriptible* : la note est conservée en mémoire et restituée à l'arrêt via l'historique et l'export ; la session continue (cohérent avec le comportement live existant).
-- *4b. Réunion avec distinction par locuteur* : la note est incluse dans le **tri chronologique final** (réécriture triée), entrelacée avec les lignes `Moi`/`Interlocuteurs`.
+- *4b. Réunion avec distinction par locuteur* : la note est incluse dans le **tri chronologique final** (réécriture triée), entrelacée avec les lignes `Moi`/`Interlocuteurs` ou, si UC-18 actif, avec les lignes `Locuteur N`.
 - *Signet hors session* (`IDLE`, dictée…) : **no-op journalisé** (cohérent BR-01), aucun effet de bord.
 - *Session arrêtée entre la saisie et la validation* : la note est rattachée à la session qui vient de se terminer (dernier horodatage) plutôt que perdue.
 - *Raccourci signet non enregistrable* (conflit) : signalé (log + UI), le reste de la session fonctionne normalement.
@@ -445,7 +499,7 @@ en une transcription continue sans étiquette de locuteur.
 |-------|--------|
 | **Acteur principal** | Utilisateur (activation) / Système (exécution automatique) |
 | **Acteur secondaire** | LLM local (cf. UC-06) |
-| **Objectif** | Obtenir, à la fin de chaque session Live continu (UC-09) ou Conférence (UC-10), un **résumé de la conversation** (sujets, décisions, actions) — sans relire tout le transcript. |
+| **Objectif** | Obtenir, à la fin de chaque session Live continu (UC-09) ou Conférence (UC-10, éventuellement avec UC-18), un **résumé de la conversation** (sujets, décisions, actions) — sans relire tout le transcript. |
 | **Déclencheur** | Arrêt de la session, si `summary.enabled: true` (opt-in, écran Configuration ou `config.yaml`). |
 | **Préconditions** | `summary.enabled` ; serveur LLM **local** lancé (même endpoint que UC-06, activation indépendante de `ai.enabled`) ; session terminée avec du texte. |
 | **Garanties (succès)** | Le résumé est ajouté en fin de transcript (section « Résumé »), archivé dans l'historique (source `résumé live`/`résumé réunion`) et notifié. |
