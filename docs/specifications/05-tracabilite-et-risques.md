@@ -21,6 +21,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-14 Modèle initial | ○ | ○ | ○ | ○ | ○ | ● |
 | UC-15 GPU | ○ | | | | | ● |
 | UC-16 Notes en session | | ○ | | | ● | |
+| UC-17 Résumé de session | | ○ | | | ● | |
 
 > P-03 (RSSI) « consomme » surtout les **contraintes** (CO-01…03) plutôt que les UC : elle
 > valide le comportement zéro-réseau, transverse à tous les cas d'utilisation.
@@ -48,6 +49,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-14 Modèle initial | FR-18 | PE-02, CO-01, CO-02 |
 | UC-15 GPU | FR-03 | PE-01, CO-12 |
 | UC-16 Notes en session | FR-23, FR-24, FR-25, FR-26, FR-27 | US-10, RE-11, PE-06, CO-01, CO-09, BR-01, BR-06, BR-07 |
+| UC-17 Résumé de session | FR-28 | RE-12, CO-01, CO-03, BR-06 |
 
 ## 3. Couverture inverse Exigence → Cas d'utilisation
 
@@ -81,6 +83,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-25 | UC-16 |
 | FR-26 | UC-16 |
 | FR-27 | UC-16 (exclusion documentée — Won't) |
+| FR-28 | UC-17 |
 | US-01 | UC-01, UC-02 |
 | US-02 | UC-07, UC-08, UC-09, UC-10, UC-12 |
 | US-03 | UC-01 |
@@ -102,6 +105,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RE-09 | UC-10 |
 | RE-10 | UC-08, UC-09, UC-10 |
 | RE-11 | UC-16 |
+| RE-12 | UC-17 |
 | PE-01 | UC-01, UC-15 |
 | PE-02 | UC-01, UC-14 |
 | PE-03 | UC-01, UC-09, UC-10 |
@@ -116,9 +120,9 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | SU-06 | transverse (architecture) |
 | SU-07 | transverse (conventions) |
 | SU-08 | UC-08, UC-12 |
-| CO-01 | UC-01, UC-06, UC-14, UC-16 (+ transverse, cardinal) |
+| CO-01 | UC-01, UC-06, UC-14, UC-16, UC-17 (+ transverse, cardinal) |
 | CO-02 | UC-14 |
-| CO-03 | UC-06 |
+| CO-03 | UC-06, UC-17 |
 | CO-04 | UC-10 |
 | CO-05 | UC-09, UC-10 |
 | CO-06 | UC-09, UC-10 |
@@ -137,7 +141,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | BR-03 | UC-01, UC-04, UC-06 |
 | BR-04 | UC-01 |
 | BR-05 | UC-10 |
-| BR-06 | UC-07, UC-09, UC-10, UC-16 |
+| BR-06 | UC-07, UC-09, UC-10, UC-16, UC-17 |
 | BR-07 | UC-16 |
 
 > **Conclusion** : aucune exigence orpheline — chaque exigence (FR/US/RE/PE/SU/CO) et chaque
@@ -181,9 +185,9 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 
 | Catégorie | Nb exigences | Couverture personas |
 |-----------|:------------:|---------------------|
-| Functionality (FR) | 26 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
+| Functionality (FR) | 27 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
 | Usability (US) | 10 | P-01, P-04 (priorité), tous |
-| Reliability (RE) | 11 | P-04, P-02 (priorité), tous |
+| Reliability (RE) | 12 | P-04, P-02 (priorité), tous |
 | Performance (PE) | 6 | P-01, P-05, P-06 |
 | Supportability (SU) | 8 | P-06 (priorité), mainteneurs |
 | Contraintes (CO) | 16 | P-03 (priorité), tous |

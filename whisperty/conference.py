@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -72,6 +73,20 @@ def format_segment_line(elapsed_seconds: float, text: str, speaker: Optional[str
     stamp = f"{int(elapsed_seconds // 60):02d}:{int(elapsed_seconds % 60):02d}"
     prefix = f"[{stamp}] " + (f"{speaker} : " if speaker else "")
     return prefix + text
+
+
+def parse_stamp(stamp: Optional[str]) -> Optional[float]:
+    """Convertit un horodatage « MM:SS » (position de session) en secondes.
+
+    Logique pure (testable hors-ligne). ``None`` si absent ou invalide — le format
+    vient de l'interface (cliente : on ne lui fait pas confiance).
+    """
+    if not stamp:
+        return None
+    m = re.fullmatch(r"(\d{1,4}):([0-5]\d)", str(stamp).strip())
+    if not m:
+        return None
+    return float(int(m.group(1)) * 60 + int(m.group(2)))
 
 
 def _transcript_header(device_sys: Optional[str], mic_label: str, fmt: str) -> str:
@@ -134,6 +149,11 @@ class ConferenceTranscriber:
         # Chaque segment : (instant de début en s, locuteur ou None, texte). En mode
         # « distinction », le locuteur est renseigné et les segments sont triés à la fin.
         self._segments: list[tuple[float, Optional[str], str]] = []
+        # Notes utilisateur en session (UC-16), (position en s, texte). Elles arrivent
+        # d'AUTRES threads (pont GUI, raccourci signet) que le mixeur : _segments/_notes/
+        # _file sont protégés par ce verrou FEUILLE (jamais imbriqué avec un autre verrou).
+        self._note_lock = threading.Lock()
+        self._notes: list[tuple[float, str]] = []
         self._error: Optional[str] = None
         self._t0 = 0.0
         self._buffers: dict[str, _StreamBuffer] = {"mic": _StreamBuffer(), "system": _StreamBuffer()}
@@ -159,6 +179,7 @@ class ConferenceTranscriber:
             return False
         self._stop.clear()
         self._segments = []
+        self._notes = []
         self._error = None
         self._active = set()
         self._buffers = {"mic": _StreamBuffer(), "system": _StreamBuffer()}
@@ -436,23 +457,59 @@ class ConferenceTranscriber:
     def _emit(self, text: str) -> None:
         """Mode mixé (itération 1) : un segment sans étiquette de locuteur."""
         elapsed = max(0.0, time.monotonic() - self._t0)
-        self._segments.append((elapsed, None, text))
+        with self._note_lock:
+            self._segments.append((elapsed, None, text))
         self._write_line(format_segment_line(elapsed, text), text)
 
     def _write_line(self, line: str, text: str) -> None:
         """Écrit une ligne dans le transcript (au fil de l'eau), journalise, notifie."""
-        if self._file is not None:
-            try:
-                self._file.write(line + "\n")
-                self._file.flush()
-            except OSError:
-                logger.warning("Écriture du transcript de réunion échouée.", exc_info=True)
+        with self._note_lock:
+            self._write_file_locked(line + "\n")
         logger.info("Réunion %s", line)
         if self._on_segment is not None:
             try:
                 self._on_segment(line, text)
             except Exception:  # noqa: BLE001
                 logger.exception("on_segment a levé une exception")
+
+    def _write_file_locked(self, data: str) -> None:
+        """Écriture brute dans le transcript (``_note_lock`` TENU par l'appelant).
+
+        Un échec n'interrompt jamais la session : le texte reste en mémoire
+        (``_segments``/``_notes``) et est restitué à l'arrêt.
+        """
+        if self._file is None:
+            return
+        try:
+            self._file.write(data)
+            self._file.flush()
+        except OSError:
+            logger.warning("Écriture du transcript de réunion échouée.", exc_info=True)
+
+    # -- notes utilisateur (UC-16) ----------------------------------------------
+    def add_note(self, text: str, stamp: Optional[str] = None) -> Optional[str]:
+        """Ajoute une note utilisateur ancrée à la position de session (UC-16).
+
+        Appelée depuis le pont GUI ou le raccourci signet (threads ≠ mixeur) ; les
+        structures partagées sont protégées par ``_note_lock``. ``stamp`` optionnel
+        (« MM:SS ») = position du segment cité, sinon la position courante. La note
+        entre dans ``_segments`` avec le locuteur « Note » : elle est entrelacée
+        chronologiquement au tri final (BR-07). Renvoie la ligne affichable, ou
+        ``None`` si la note est vide ou la session inactive.
+        """
+        text = " ".join(str(text or "").split())
+        if not text or not self.is_running():
+            return None
+        elapsed = parse_stamp(stamp)
+        if elapsed is None:
+            elapsed = max(0.0, time.monotonic() - self._t0) if self._t0 else 0.0
+        line = format_segment_line(elapsed, text, speaker="Note")
+        with self._note_lock:
+            self._notes.append((elapsed, text))
+            self._segments.append((elapsed, "Note", text))
+            self._write_file_locked(line + "\n")
+        logger.info("Réunion %s", line)
+        return line
 
     # -- distinction par source (itération 2) ----------------------------------
     def _consume_distinct(self) -> None:
@@ -512,7 +569,8 @@ class ConferenceTranscriber:
             if not text:
                 continue
             abs_start = chunk_start + max(0.0, float(start))
-            self._segments.append((abs_start, label, text))
+            with self._note_lock:
+                self._segments.append((abs_start, label, text))
             self._write_line(format_segment_line(abs_start, text, speaker=label), text)
 
     # -- transcript ------------------------------------------------------------
@@ -536,14 +594,30 @@ class ConferenceTranscriber:
             return None
 
     def _close_transcript(self) -> None:
-        if self._file is not None:
+        # Sous _note_lock : une note concurrente ne doit ni écrire dans un fichier
+        # fermé, ni être omise du récapitulatif de fin (FR-26).
+        with self._note_lock:
+            if self._file is None:
+                return
+            if self._notes:
+                self._write_file_locked(self._notes_recap(self._notes))
             try:
                 self._file.close()
+            except OSError:
+                logger.warning("Fermeture du transcript de réunion échouée.", exc_info=True)
             finally:
                 self._file = None
 
-    def _rewrite_sorted(self, path: Optional[Path], ordered: list) -> None:
-        """Réécrit le transcript trié chronologiquement (entrelacement des deux sources).
+    def _notes_recap(self, notes: list) -> str:
+        """Section récapitulative « Notes » de fin de transcript (FR-26)."""
+        heading = "\n## Notes\n\n" if self._fmt == "md" else "\n# Notes\n"
+        return heading + "".join(
+            format_segment_line(elapsed, text) + "\n" for elapsed, text in notes
+        )
+
+    def _rewrite_sorted(self, path: Optional[Path], ordered: list, notes: list) -> None:
+        """Réécrit le transcript trié chronologiquement (entrelacement des deux sources,
+        notes utilisateur comprises), suivi du récapitulatif « Notes » (FR-26).
 
         Écriture atomique (fichier temporaire + ``os.replace``) : si elle échoue, la
         version au fil de l'eau (complète mais non triée) reste intacte au lieu d'être tronquée."""
@@ -555,6 +629,8 @@ class ConferenceTranscriber:
                 fh.write(_transcript_header(self._device_sys, self._mic_label_header, self._fmt))
                 for start, label, text in ordered:
                     fh.write(format_segment_line(start, text, speaker=label) + "\n")
+                if notes:
+                    fh.write(self._notes_recap(notes))
             os.replace(tmp, path)  # atomique (NTFS) : l'original n'est remplacé qu'en cas de succès
         except OSError:
             logger.warning(
@@ -568,21 +644,31 @@ class ConferenceTranscriber:
                 pass
 
     def _finish(self, device_sys: Optional[str], path: Optional[Path]) -> None:
+        # Instantané sous verrou : des notes peuvent encore arriver d'autres threads.
+        with self._note_lock:
+            segments = list(self._segments)
+            notes = sorted(self._notes, key=lambda note: note[0])
         # Entrelacement chronologique : tri par instant de début (identité en mode mixé,
-        # vrai entrelacement des deux sources en mode distinction).
-        ordered = sorted(self._segments, key=lambda record: record[0])
+        # vrai entrelacement des deux sources — et des notes — en mode distinction).
+        ordered = sorted(segments, key=lambda record: record[0])
         if self._distinct:
             body = "\n".join(
                 format_segment_line(start, text, speaker=label) for start, label, text in ordered
             )
-            self._rewrite_sorted(path, ordered)  # le fichier final reflète l'ordre chronologique
+            # Le fichier final reflète l'ordre chronologique (notes comprises).
+            self._rewrite_sorted(path, ordered, notes)
         else:
-            body = "\n".join(text for _start, _label, text in ordered)
+            # Mode mixé : texte nu, mais les notes gardent leur marqueur (US-10).
+            body = "\n".join(
+                (f"[Note] {text}" if label == "Note" else text)
+                for _start, label, text in ordered
+            )
         result = {
             "text": body.strip(),
             "device": device_sys,
             "sources": sorted(self._active),
-            "segments": len(self._segments),
+            "segments": len(segments) - len(notes),
+            "notes": len(notes),
             "path": str(path) if path is not None else None,
             "error": self._error,
         }

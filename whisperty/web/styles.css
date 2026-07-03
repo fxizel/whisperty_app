@@ -483,3 +483,35 @@ input[type=text] {
 .last-text.live::-webkit-scrollbar { width: 8px; }
 .last-text.live::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
 .copied { color: var(--green-2); }
+
+/* ── Notes en session (UC-16, modes Live/Conférence) ─────────────────────────
+   En flux direct, chaque segment devient une ligne avec une action « Noter » au
+   survol (note-citation, FR-25) ; les notes de l'utilisateur sont visuellement
+   distinctes des segments transcrits (US-10). Le champ .note-row, sous la tuile,
+   ajoute une note horodatée au moment de la validation. */
+.live-line { display: block; position: relative; padding-right: 30px; border-radius: 6px; }
+.live-line:hover { background: rgba(255,255,255,0.04); }
+.live-line.note {
+  color: #c084fc; font-weight: 500;
+  border-left: 2px solid rgba(168,85,247,0.55); padding-left: 8px; margin: 2px 0;
+}
+.line-note-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: none; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border: 1px solid rgba(168,85,247,0.4); border-radius: 6px;
+  background: rgba(168,85,247,0.13); color: var(--violet-2); cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0;
+}
+.live-line:hover .line-note-btn { display: flex; }
+.line-note-btn:hover { background: rgba(168,85,247,0.25); }
+
+.note-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 7px 10px;
+  border-radius: 9px; background: var(--panel-2); border: 1px solid rgba(168,85,247,0.25);
+  color: var(--violet-2); flex: 0 0 auto;
+}
+.note-row input {
+  flex: 1 1 auto; min-width: 0; border: none; background: transparent;
+  color: var(--text-2); font-size: 13px; outline: none;
+}
+.note-row input::placeholder { color: var(--dim); }

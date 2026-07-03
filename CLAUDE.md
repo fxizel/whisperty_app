@@ -89,6 +89,13 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
   l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
   suspect, sans bloquer la capture loopback.
+- **Notes en session (V2, UC-16)** : `LiveTranscriber._note_lock` et
+  `ConferenceTranscriber._note_lock` sont des **verrous feuilles** (jamais imbriqués avec un
+  autre verrou) protégeant `_segments`/`_notes`/`_file` — les notes arrivent du pont GUI
+  (`GuiApi.add_note`) ou du raccourci signet, PAS du worker. `WhispertyApp.add_note` lit
+  l'état sous `_lock`, puis appelle `add_note` du transcriber **hors** verrou. JAMAIS de
+  traitement de note dans les threads de capture (RE-11) ; l'affichage passe par le flux
+  existant (`_append_live_line` → `_live_rev`), pas de payload ajouté au polling.
 - **Interface fenêtre (V2)** : `webview.start()` exige le **thread principal** ; le tray tourne
   donc **détaché** (`Tray.run_detached()`) et `launch_gui()` bloque le thread principal. Les
   méthodes de `GuiApi` (pont) et les actions tray s'exécutent sur d'AUTRES threads et délèguent à
@@ -122,6 +129,12 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 - **IA locale (V2)** : `ai.py` n'autorise QUE des endpoints locaux (`ai.is_local_endpoint` :
   localhost/127.0.0.1/::1) et est **désactivé par défaut**. Tout endpoint distant est refusé —
   le texte dicté ne doit jamais sortir de la machine. Échec LLM = texte brut conservé (jamais bloquant).
+  Le **résumé de fin de session** (UC-17, `summary:`) réutilise le MÊME LLM local
+  (`LocalLLM.summarize`, opt-in **indépendant** de `ai.enabled`, garde identique dans `_chat`) :
+  lancé par `WhispertyApp._maybe_summarize` dans un thread worker **APRÈS** le retour IDLE
+  (jamais sous `_lock`, ne bloque ni la machine à états ni une nouvelle dictée), il complète le
+  transcript (`# Résumé`), historise (`source="résumé live/réunion"`) et notifie ; échec = session
+  déjà archivée, rien n'est perdu. Entrée tronquée début+fin au-delà de `summary.max_chars`.
 - **Historique (V2)** : `history.py` = SQLite local (`sqlite3` stdlib), connexion partagée
   `check_same_thread=False` mais **tous les accès passent par `History._lock`** ; écriture non bloquante.
 - **Profils (V2)** : surcharge `initial_prompt`/langue/dictionnaire selon l'app active, capturée

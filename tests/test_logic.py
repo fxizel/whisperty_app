@@ -1243,6 +1243,156 @@ def test_conference_distinct(tmp_path: Path) -> None:
     print("[20] réunion distinction : horodatage, entrelacement, mono, md, libellés configurables  OK")
 
 
+# =============================================================================
+# 22) Résumé de fin de session (UC-17) — LLM local
+# =============================================================================
+def test_session_summary() -> None:
+    import json
+
+    import whisperty.ai as ai_mod
+    from whisperty.ai import LocalLLM
+    from whisperty.config import AIConfig, SummaryConfig
+
+    # Désactivé (défaut), texte vide, ou config résumé absente → None, aucun appel.
+    assert LocalLLM(AIConfig(), SummaryConfig()).summarize("transcript") is None
+    assert LocalLLM(AIConfig(), SummaryConfig(enabled=True)).summarize("   ") is None
+    assert LocalLLM(AIConfig()).summarize("transcript") is None
+
+    # Endpoint DISTANT → refus par la garde commune (le transcript ne sort jamais).
+    remote = LocalLLM(
+        AIConfig(endpoint="http://evil.example.com/v1/chat/completions"),
+        SummaryConfig(enabled=True),
+    )
+    assert remote.summarize("texte secret") is None
+
+    # Local + opener simulé : prompt dédié, troncature début+fin, indépendance de
+    # ai.enabled (False ici : seul summary.enabled compte).
+    captured: dict = {}
+
+    class _FakeResp:
+        def __init__(self, payload, url="http://localhost:11434/v1/chat/completions"):
+            self._b = json.dumps(payload).encode("utf-8")
+            self._url = url
+
+        def read(self):
+            return self._b
+
+        def geturl(self):
+            return self._url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_open(req, timeout=None):
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp({"choices": [{"message": {"content": "• Décision : GO"}}]})
+
+    original = ai_mod._OPENER
+    ai_mod._OPENER = types.SimpleNamespace(open=fake_open)
+    try:
+        scfg = SummaryConfig(enabled=True, max_chars=40, timeout=99.0)
+        llm = LocalLLM(AIConfig(enabled=False), scfg)  # raffinage OFF, résumé ON
+        text = "DEBUT " + "x" * 200 + " FIN"
+        assert llm.summarize(text) == "• Décision : GO"
+        messages = captured["payload"]["messages"]
+        assert messages[0]["content"] == scfg.prompt          # prompt dédié au résumé
+        user = messages[1]["content"]
+        assert user.startswith("DEBUT") and user.endswith("FIN")
+        assert "[… transcription tronquée …]" in user          # coupe début+fin
+        assert len(user) <= 40 + len("\n[… transcription tronquée …]\n")
+        assert captured["timeout"] == 99.0                     # timeout du résumé
+    finally:
+        ai_mod._OPENER = original
+    print("[22] résumé de session : garde locale + opt-in indépendant + troncature  OK")
+
+
+# =============================================================================
+# 21) Notes en session (UC-16) — live + réunion
+# =============================================================================
+def test_session_notes(tmp_path: Path) -> None:
+    import threading
+
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber, parse_stamp
+    from whisperty.live import LiveTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.live.transcript_dir = "notes_out"
+    cfg.conference.export_dir = "notes_out"
+
+    # parse_stamp : logique pure (horodatage « MM:SS » fourni par l'UI, non fiable).
+    assert parse_stamp("01:15") == 75.0
+    assert parse_stamp("00:05") == 5.0
+    assert parse_stamp(None) is None and parse_stamp("") is None
+    assert parse_stamp("1:99") is None and parse_stamp("abc") is None
+
+    class FakeTr:
+        def transcribe(self, audio, profile=None):
+            return "segment"
+
+    # -- live : refus hors session, note vide ignorée, fichier + récap + compteur --
+    lt = LiveTranscriber(cfg, FakeTr())
+    assert lt.add_note("perdue") is None            # session inactive → refus
+    p = lt._open_transcript("Dev")
+    lt._thread = threading.current_thread()          # simule une session active
+    assert lt.add_note("   ") is None                # note vide ignorée (US-10)
+    lt._emit("bonjour")
+    line = lt.add_note("À faire : envoyer le budget")
+    assert line == "[Note] À faire : envoyer le budget"
+    lt._thread = None
+    lt._close_transcript()
+    content = p.read_text(encoding="utf-8")
+    assert "[Note] À faire : envoyer le budget" in content
+    assert "# Notes" in content                      # récapitulatif de fin (FR-26)
+    finished: dict = {}
+    lt._on_finished = lambda r: finished.update(r)
+    lt._finish("Dev", p)
+    assert finished["segments"] == 1 and finished["notes"] == 1
+    assert "[Note] À faire : envoyer le budget" in finished["text"]
+    p.unlink()
+
+    # -- robustesse : sans fichier transcript, la note reste en mémoire (RE-11) --
+    lt2 = LiveTranscriber(cfg, FakeTr())
+    lt2._thread = threading.current_thread()
+    assert lt2.add_note("sans fichier") == "[Note] sans fichier"
+    lt2._thread = None
+    fin2: dict = {}
+    lt2._on_finished = lambda r: fin2.update(r)
+    lt2._finish(None, None)
+    assert "[Note] sans fichier" in fin2["text"] and fin2["notes"] == 1
+
+    # -- réunion : ancrage [MM:SS] + entrelacement chronologique au tri (BR-07) --
+    cfg.conference.distinguish_speakers = True
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._thread = threading.current_thread()
+    path2 = ct._open_transcript("Sys", "Micro")
+    ct._segments.append((5.0, "Moi", "premier point"))
+    ct._segments.append((20.0, "Interlocuteurs", "réponse"))
+    assert ct.add_note("décision actée", stamp="00:10") == "[00:10] Note : décision actée"
+    finished2: dict = {}
+    ct._on_finished = lambda r: finished2.update(r)
+    ct._close_transcript()
+    ct._finish("Sys", path2)
+    lines = finished2["text"].split("\n")
+    assert lines == [
+        "[00:05] Moi : premier point",
+        "[00:10] Note : décision actée",
+        "[00:20] Interlocuteurs : réponse",
+    ], lines
+    assert finished2["segments"] == 2 and finished2["notes"] == 1
+    final = path2.read_text(encoding="utf-8")
+    assert final.index("[00:05]") < final.index("[00:10] Note") < final.index("[00:20]")
+    assert "# Notes" in final                        # récap aussi dans la réécriture triée
+    path2.unlink()
+    print("[21] notes en session : live + réunion (ancrage, tri, récapitulatif, RE-11)  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -1268,6 +1418,8 @@ def _run_all() -> None:
     test_conference_consume(tmp)
     test_conference_degradation(tmp)
     test_conference_distinct(tmp)
+    test_session_notes(tmp)
+    test_session_summary()
     print("\nTOUS LES TESTS PASSENT")
 
 

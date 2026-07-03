@@ -16,9 +16,11 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 from .ai import LocalLLM
 from .conference import ConferenceTranscriber
@@ -39,6 +41,14 @@ logger = logging.getLogger("whisperty")
 # direct »). Borne la RAM et le payload get_live_text sur une très longue session ;
 # le transcript fichier et l'historique, eux, conservent l'intégralité du texte.
 _LIVE_DISPLAY_MAX_LINES = 400
+
+# Horodatage accepté pour une note-citation (UC-16) : « MM:SS » (position de session,
+# réunion) ou « HH:MM:SS » (heure murale, live). Fourni par l'UI (cliente : validé ici).
+_NOTE_STAMP_RE = re.compile(r"\d{1,4}:[0-5]\d(:[0-5]\d)?")
+
+# Horodatage en tête d'une ligne de réunion (« [MM:SS] … ») — pour associer chaque
+# ligne du flux affiché à sa position (action « Noter » de l'UI).
+_LINE_STAMP_RE = re.compile(r"^\[(\d{1,4}:[0-5]\d)\]")
 
 
 def setup_logging(config: Config) -> None:
@@ -80,7 +90,7 @@ class WhispertyApp:
         self.injector = TextInjector(config.output)
         # V2 : historique local, raffinage LLM local, profils de contexte.
         self.history = History.from_config(config)
-        self.llm = LocalLLM(config.ai)
+        self.llm = LocalLLM(config.ai, config.summary)
         self.profiles = ProfileResolver(config)
         # V2 : flux de transcription « au fil de l'eau » des modes live/réunion, pour
         # affichage progressif dans la tuile « Dernière transcription » de l'UI fenêtre.
@@ -89,6 +99,9 @@ class WhispertyApp:
         # renvoyer tout le transcript à chaque tick : le JS ne le récupère qu'au changement.
         self._live_lock = threading.Lock()
         self._live_lines: list[str] = []
+        # Horodatage de chaque ligne affichée (parallèle à _live_lines) : permet à
+        # l'action « Noter » de l'UI d'ancrer une note-citation à SON segment (FR-25).
+        self._live_stamps: list[str] = []
         self._live_rev = 0
         # V2 : transcription live d'une sortie audio (loopback).
         self.live = LiveTranscriber(
@@ -125,6 +138,8 @@ class WhispertyApp:
         self._quitting = False
         self._quit_event = threading.Event()
         self._listener = None
+        # Écouteur du raccourci « signet de note » (UC-16) ; None si désactivé/invalide.
+        self._note_listener = None
         # Interface fenêtre (GuiApi) si lancée ; None en mode tray seul.
         self._gui = None
         # Application active capturée au démarrage de la dictée (profils de contexte).
@@ -356,26 +371,32 @@ class WhispertyApp:
         """Vide le flux affiché et invalide le cache JS (le compteur change → re-fetch)."""
         with self._live_lock:
             self._live_lines = []
+            self._live_stamps = []
             self._live_rev += 1
 
-    def _append_live_line(self, display: str) -> None:
+    def _append_live_line(self, display: str, stamp: str = "") -> None:
         """Ajoute une ligne au flux affiché (appelé depuis le thread worker)."""
         display = (display or "").strip()
         if not display:
             return
         with self._live_lock:
             self._live_lines.append(display)
+            self._live_stamps.append(stamp or "")
             if len(self._live_lines) > _LIVE_DISPLAY_MAX_LINES:
                 del self._live_lines[: -_LIVE_DISPLAY_MAX_LINES]
+                del self._live_stamps[: -_LIVE_DISPLAY_MAX_LINES]
             self._live_rev += 1
 
-    def _on_live_segment(self, _stamp: str, text: str) -> None:
-        # En live, on affiche le texte seul (lecture fluide ; l'horodatage va au fichier).
-        self._append_live_line(text)
+    def _on_live_segment(self, stamp: str, text: str) -> None:
+        # En live, on affiche le texte seul (lecture fluide ; l'horodatage va au fichier)
+        # mais on retient le stamp par ligne pour l'action « Noter » (FR-25).
+        self._append_live_line(text, stamp)
 
     def _on_conference_segment(self, line: str, _text: str) -> None:
-        # En réunion, on affiche la ligne déjà formatée ([MM:SS] éventuel locuteur : …).
-        self._append_live_line(line)
+        # En réunion, on affiche la ligne déjà formatée ([MM:SS] éventuel locuteur : …) ;
+        # la position [MM:SS] en tête sert de stamp pour l'action « Noter ».
+        match = _LINE_STAMP_RE.match(line or "")
+        self._append_live_line(line, match.group(1) if match else "")
 
     def live_rev(self) -> int:
         """Compteur monotone du flux live (lu par GuiApi.poll, payload minimal)."""
@@ -383,9 +404,102 @@ class WhispertyApp:
             return self._live_rev
 
     def live_transcript(self) -> dict:
-        """Flux live courant : {rev, text}. Récupéré par le JS quand rev a changé."""
+        """Flux live courant : {rev, text, stamps}. Récupéré par le JS quand rev a changé.
+
+        ``stamps`` (horodatage par ligne, parallèle aux lignes de ``text``) permet à
+        l'action « Noter » d'ancrer une note-citation au segment cliqué (FR-25).
+        """
         with self._live_lock:
-            return {"rev": self._live_rev, "text": "\n".join(self._live_lines)}
+            return {
+                "rev": self._live_rev,
+                "text": "\n".join(self._live_lines),
+                "stamps": list(self._live_stamps),
+            }
+
+    # -- notes en session (UC-16) ------------------------------------------------
+    def add_note(self, text: object = None, stamp: object = None) -> dict:
+        """Crée une note utilisateur pendant une session live/réunion (UC-16).
+
+        Appelée depuis le pont GUI (champ de saisie / action « Noter ») ou le
+        raccourci signet — jamais depuis les threads de capture (RE-11). ``stamp``
+        optionnel = horodatage du segment cité (FR-25) ; sinon la note est horodatée
+        au moment de la validation (BR-07). Hors session : refus sans effet de bord.
+        """
+        note = " ".join(str(text or "").split())
+        if not note:
+            return {"ok": False, "error": "Note vide."}
+        stamp_s = str(stamp).strip() if stamp else ""
+        if not _NOTE_STAMP_RE.fullmatch(stamp_s):  # payload client : ne pas s'y fier
+            stamp_s = None
+        with self._lock:
+            state = self._state
+        # Hors _lock : add_note des transcribers est thread-safe (verrou feuille interne).
+        if state is TrayState.LIVE:
+            line = self.live.add_note(note, stamp_s)
+        elif state is TrayState.CONFERENCE:
+            line = self.conference.add_note(note, stamp_s)
+        else:
+            line = None
+        if line is None:
+            logger.info("Note ignorée : aucune session live/réunion en cours.")
+            return {"ok": False, "error": "Aucune session live ou réunion en cours."}
+        self._append_live_line(line, stamp_s or "")
+        return {"ok": True}
+
+    # -- résumé de fin de session (UC-17) ---------------------------------------
+    def _maybe_summarize(self, text: str, path: object, mode: str) -> None:
+        """Lance le résumé de fin de session dans un thread worker si activé (UC-17).
+
+        L'appel LLM (transcript entier) peut durer des dizaines de secondes : il
+        s'exécute APRÈS le retour à IDLE, en arrière-plan — il ne bloque ni la
+        machine à états, ni une nouvelle dictée, ni l'arrêt de l'application
+        (thread daemon, best-effort). Échec = pas de résumé ; la session est déjà
+        archivée, rien n'est perdu (même doctrine que RE-06).
+        """
+        if not self.config.summary.enabled or not (text or "").strip():
+            return
+        try:
+            threading.Thread(
+                target=self._summarize_session, args=(text, path, mode), daemon=True
+            ).start()
+        except RuntimeError:
+            logger.exception("Démarrage du thread de résumé impossible")
+
+    def _summarize_session(self, text: str, path: object, mode: str) -> None:
+        """Worker : résume la session (LLM local), complète le transcript, archive."""
+        logger.info("Résumé de %s en cours (LLM local)…", mode)
+        summary = self.llm.summarize(text)
+        if not summary:
+            # summarize() a déjà journalisé la cause (serveur muet, endpoint refusé…).
+            self.tray.notify(f"Résumé de {mode} indisponible (LLM local muet ou refusé).")
+            return
+        if path:
+            try:
+                p = Path(str(path))
+                heading = "\n## Résumé\n\n" if p.suffix.lower() == ".md" else "\n# Résumé\n"
+                with p.open("a", encoding="utf-8") as fh:
+                    fh.write(heading + summary.strip() + "\n")
+            except OSError:
+                logger.warning("Ajout du résumé au transcript échoué.", exc_info=True)
+        try:
+            self.history.add(
+                summary, source=f"résumé {mode}", app=None,
+                model=self.config.ai.model,
+            )
+        except Exception:  # noqa: BLE001 — l'app peut être en cours d'arrêt (base fermée)
+            logger.exception("Archivage du résumé échoué")
+        self.tray.notify(f"Résumé de {mode} prêt (transcript + historique).")
+
+    def add_note_bookmark(self) -> None:
+        """Signet : note horodatée sans texte saisi (raccourci global, UC-16).
+
+        Hors session live/réunion : no-op journalisé (BR-01) — aucun effet de bord
+        sur la dictée. Le retour visible passe par la tuile du flux ; la notification
+        tray couvre le cas « fenêtre masquée » (best-effort).
+        """
+        result = self.add_note("Moment marqué")
+        if result.get("ok"):
+            self.tray.notify("Signet ajouté à la transcription.")
 
     # -- transcription live d'une sortie audio (V2) ----------------------------
     def start_live(self, device_spec: object = None) -> None:
@@ -442,11 +556,17 @@ class WhispertyApp:
         if error:
             self.tray.notify(f"Transcription live arrêtée : {error}")
         elif text:
+            notes = result.get("notes", 0)
+            extra = f" et {notes} note(s)" if notes else ""
             self.tray.notify(
-                f"Transcription live arrêtée — {count} segment(s) copiés dans le presse-papiers."
+                f"Transcription live arrêtée — {count} segment(s){extra} "
+                "copiés dans le presse-papiers."
             )
         else:
             self.tray.notify("Transcription live arrêtée — aucun texte transcrit.")
+        # Résumé de fin de session (UC-17) : APRÈS l'archivage et le retour IDLE.
+        if not error and text:
+            self._maybe_summarize(text, result.get("path"), "live")
 
     # -- mode réunion (V2) -----------------------------------------------------
     def start_conference(self, device_spec: object = None) -> None:
@@ -502,14 +622,20 @@ class WhispertyApp:
         with self._lock:
             if self._state is TrayState.CONFERENCE:
                 self._set_state(TrayState.IDLE)
+        notes = result.get("notes", 0)
+        extra = f", {notes} note(s)" if notes else ""
         if error:
             self.tray.notify(f"Réunion arrêtée : {error}")
         elif path:
             self.tray.notify(
-                f"Réunion terminée — {count} segment(s) (sources : {sources}). Transcript : {path}"
+                f"Réunion terminée — {count} segment(s){extra} (sources : {sources}). "
+                f"Transcript : {path}"
             )
         else:
-            self.tray.notify(f"Réunion terminée — {count} segment(s) (sources : {sources}).")
+            self.tray.notify(f"Réunion terminée — {count} segment(s){extra} (sources : {sources}).")
+        # Résumé de fin de session (UC-17) : APRÈS l'archivage et le retour IDLE.
+        if not error and text:
+            self._maybe_summarize(text, path, "réunion")
 
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
@@ -648,6 +774,12 @@ class WhispertyApp:
                 c.ai.model = str(payload["iaModel"])
                 updates["ai.model"] = c.ai.model
                 ai_changed = True
+            # -- résumé de fin de session (UC-17) : lu à l'usage, pas de rebuild --
+            if "resume" in payload:
+                res = bool(payload["resume"])
+                if res != c.summary.enabled:
+                    c.summary.enabled = res
+                    updates["summary.enabled"] = res
         except (TypeError, ValueError):
             logger.exception("Réglages invalides reçus de l'interface")
             return {"ok": False, "error": "Réglages invalides."}
@@ -673,7 +805,7 @@ class WhispertyApp:
                 logger.exception("Reconstruction de l'injecteur échouée")
         if ai_changed:
             try:
-                self.llm = LocalLLM(c.ai)
+                self.llm = LocalLLM(c.ai, c.summary)
             except Exception:  # noqa: BLE001
                 logger.exception("Reconstruction du client LLM échouée")
         if reload_model:
@@ -766,9 +898,16 @@ class WhispertyApp:
         with self._lock:
             listener = self._listener
             self._listener = None
+            note_listener = self._note_listener
+            self._note_listener = None
         if listener is not None:
             try:
                 listener.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if note_listener is not None:
+            try:
+                note_listener.stop()
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -819,6 +958,57 @@ class WhispertyApp:
                 "Raccourci '%s' invalide (format pynput) ; repli sur %s.", combo, default
             )
             return default
+
+    def _build_note_listener(self):
+        """Écouteur global du signet de note (UC-16). None si désactivé ou invalide.
+
+        Le raccourci doit différer de celui de la dictée (mêmes règles que le combo
+        principal : format pynput, éviter Win+Space). Tout problème désactive le
+        signet SANS bloquer le reste (RSK-11) : la saisie de notes dans la fenêtre
+        reste disponible.
+        """
+        from pynput import keyboard
+
+        combo = (self.config.notes.bookmark_hotkey or "").strip()
+        if not combo:
+            return None
+        try:
+            keyboard.HotKey.parse(combo)
+        except ValueError:
+            logger.error(
+                "Raccourci signet '%s' invalide (format pynput) ; signet désactivé.", combo
+            )
+            return None
+        if combo == self.config.hotkey.combo:
+            logger.error(
+                "Raccourci signet identique au raccourci de dictée ('%s') ; signet désactivé.",
+                combo,
+            )
+            return None
+        return keyboard.GlobalHotKeys({combo: self.add_note_bookmark})
+
+    def _start_note_listener(self) -> None:
+        """Démarre l'écouteur du signet de note (best-effort, jamais bloquant)."""
+        try:
+            listener = self._build_note_listener()
+            if listener is None:
+                return
+            listener.start()
+        except Exception:  # noqa: BLE001
+            logger.exception("Raccourci signet indisponible ; notes via la fenêtre seulement.")
+            return
+        # Installation sous verrou (course avec quit()) ; cf. reload_hotkey.
+        with self._lock:
+            install = not self._quitting
+            if install:
+                self._note_listener = listener
+        if not install:
+            try:
+                listener.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        logger.info("Signet de note : %s.", self.config.notes.bookmark_hotkey)
 
     def _push_to_talk_listener(self, keyboard, combo: str):
         """Enregistre tant que la combinaison est maintenue (push-to-talk)."""
@@ -889,6 +1079,7 @@ class WhispertyApp:
         threading.Thread(target=self._preload, daemon=True).start()
         self._listener = self._build_listener()
         self._listener.start()
+        self._start_note_listener()  # signet de note (UC-16), best-effort
         if not self._run_with_gui():
             # Repli : boucle tray seule, bloquante (comportement historique).
             self.tray.run()

@@ -116,6 +116,11 @@ class LiveTranscriber:
         self._file = None
         self._segments: list[str] = []
         self._error: Optional[str] = None
+        # Notes utilisateur en session (UC-16). Elles arrivent d'AUTRES threads
+        # (pont GUI, raccourci signet) que le worker : _segments/_notes/_file sont
+        # protégés par ce verrou FEUILLE (jamais imbriqué avec un autre verrou).
+        self._note_lock = threading.Lock()
+        self._notes: list[tuple[str, str]] = []  # (horodatage HH:MM:SS, texte)
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -127,6 +132,7 @@ class LiveTranscriber:
             return False
         self._stop.clear()
         self._segments = []
+        self._notes = []
         self._error = None
         try:
             self._thread = threading.Thread(
@@ -244,19 +250,51 @@ class LiveTranscriber:
 
     def _emit(self, text: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
-        self._segments.append(text)
-        if self._file is not None:
-            try:
-                self._file.write(f"[{stamp}] {text}\n")
-                self._file.flush()
-            except OSError:
-                logger.warning("Écriture du transcript live échouée.", exc_info=True)
+        with self._note_lock:
+            self._segments.append(text)
+            self._write_locked(f"[{stamp}] {text}\n")
         logger.info("Live [%s] %s", stamp, text)
         if self._on_segment is not None:
             try:
                 self._on_segment(stamp, text)
             except Exception:  # noqa: BLE001
                 logger.exception("on_segment a levé une exception")
+
+    def _write_locked(self, data: str) -> None:
+        """Écrit dans le transcript (``_note_lock`` TENU par l'appelant).
+
+        Un échec d'écriture n'interrompt jamais la session : le texte reste de
+        toute façon en mémoire (``_segments``/``_notes``) et est restitué à l'arrêt.
+        """
+        if self._file is None:
+            return
+        try:
+            self._file.write(data)
+            self._file.flush()
+        except OSError:
+            logger.warning("Écriture du transcript live échouée.", exc_info=True)
+
+    # -- notes utilisateur (UC-16) ----------------------------------------------
+    def add_note(self, text: str, stamp: Optional[str] = None) -> Optional[str]:
+        """Ajoute une note utilisateur horodatée au transcript en cours (UC-16).
+
+        Appelée depuis le pont GUI ou le raccourci signet (threads ≠ worker) ; les
+        structures partagées sont protégées par ``_note_lock``. ``stamp`` optionnel =
+        horodatage du segment cité (note-citation), sinon l'instant de validation.
+        Renvoie la ligne affichable (``[Note] …``), ou ``None`` si la note est vide
+        ou la session inactive. Ne bloque jamais la capture ni la transcription.
+        """
+        text = " ".join(str(text or "").split())
+        if not text or not self.is_running():
+            return None
+        stamp = stamp or datetime.now().strftime("%H:%M:%S")
+        line = f"[Note] {text}"
+        with self._note_lock:
+            self._notes.append((stamp, text))
+            self._segments.append(line)
+            self._write_locked(f"[{stamp}] {line}\n")
+        logger.info("Live [%s] %s", stamp, line)
+        return line
 
     # -- transcript ------------------------------------------------------------
     def _open_transcript(self, device_name: str) -> Optional[Path]:
@@ -283,17 +321,34 @@ class LiveTranscriber:
             return None
 
     def _close_transcript(self) -> None:
-        if self._file is not None:
+        # Sous _note_lock : une note concurrente ne doit ni écrire dans un fichier
+        # fermé, ni être omise du récapitulatif de fin (FR-26).
+        with self._note_lock:
+            if self._file is None:
+                return
+            if self._notes:
+                self._write_locked(
+                    "\n# Notes\n"
+                    + "".join(f"[{stamp}] {text}\n" for stamp, text in self._notes)
+                )
             try:
                 self._file.close()
+            except OSError:
+                logger.warning("Fermeture du transcript live échouée.", exc_info=True)
             finally:
                 self._file = None
 
     def _finish(self, device_name: Optional[str], path: Optional[Path]) -> None:
+        # Instantané sous verrou : des notes peuvent encore arriver d'autres threads.
+        with self._note_lock:
+            text = "\n".join(self._segments).strip()
+            segment_count = len(self._segments) - len(self._notes)
+            note_count = len(self._notes)
         result = {
-            "text": "\n".join(self._segments).strip(),
+            "text": text,
             "device": device_name,
-            "segments": len(self._segments),
+            "segments": segment_count,
+            "notes": note_count,
             "path": str(path) if path is not None else None,
             "error": self._error,
         }

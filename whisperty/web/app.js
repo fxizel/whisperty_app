@@ -20,6 +20,7 @@ const Mock = (() => {
     combo: "<alt>+<shift>+d",
     injection: "presse", delai: 5,
     ia: false, iaEndpoint: "http://localhost:11434", iaModel: "qwen2.5:3b",
+    resume: false,
     localOnly: true,
   };
   const stats = { words: 3482, dur: 47, trans: 18 };
@@ -55,7 +56,8 @@ const Mock = (() => {
 
   // Flux live factice (modes live/conférence) : des segments s'ajoutent au fil de
   // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
-  let liveRev = 0, liveLines = [], liveTimer = null;
+  // liveStamps = horodatage par ligne (parallèle), comme l'API réelle (notes, UC-16).
+  let liveRev = 0, liveLines = [], liveStamps = [], liveTimer = null;
   const liveSamples = [
     "Bonjour à tous, merci d'être présents pour ce point d'avancement.",
     "On commence par un rapide tour des sujets prioritaires de la semaine.",
@@ -65,11 +67,16 @@ const Mock = (() => {
     "On valide le passage au modèle medium pour les conférences plus longues.",
     "Prochain jalon : préparer la démonstration pour mercredi après-midi.",
   ];
+  function mockStamp(seconds) {
+    const m = Math.floor(seconds / 60), s = Math.floor(seconds % 60);
+    return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  }
   function startLiveMock() {
-    liveLines = []; liveRev++;
+    liveLines = []; liveStamps = []; liveRev++;
     let i = 0;
     liveTimer = setInterval(() => {
-      liveLines.push(liveSamples[i % liveSamples.length]); i++; liveRev++;
+      liveLines.push(liveSamples[i % liveSamples.length]);
+      liveStamps.push(mockStamp(i * 2.2)); i++; liveRev++;
     }, 2200);
   }
   function stopLiveMock() {
@@ -85,7 +92,15 @@ const Mock = (() => {
     }),
     get_dashboard: () => ({ lastText, statsWords: stats.words, statsDur: stats.dur, statsTrans: stats.trans, combo: cfg.combo, model: cfg.model, device: cfg.device }),
     set_mode: (m) => { if (m) mode = m; return { ok: true }; },
-    get_live_text: () => ({ rev: liveRev, text: liveLines.join("\n") }),
+    get_live_text: () => ({ rev: liveRev, text: liveLines.join("\n"), stamps: liveStamps.slice() }),
+    // Notes en session (UC-16) : simule WhispertyApp.add_note (aperçu autonome).
+    add_note: (text, stamp) => {
+      text = (text || "").trim();
+      if (!text) return { ok: false, error: "Note vide." };
+      if (state !== "live" && state !== "conference") return { ok: false, error: "Aucune session live ou réunion en cours." };
+      liveLines.push("[Note] " + text); liveStamps.push(stamp || ""); liveRev++;
+      return { ok: true };
+    },
     toggle_record: () => {
       if (state === "idle") {
         if (mode === "live") { state = "live"; startLiveMock(); }
@@ -154,6 +169,9 @@ const ui = {
   copiedId: null,
   stopping: false,  // arrêt demandé : retour visuel immédiat le temps que le worker finalise
   liveRev: -1,      // dernière révision du flux live vue (live/conférence) ; -1 = à récupérer
+  liveLines: [],    // lignes du flux affiché (rendu + copie + citation de note)
+  liveStamps: [],   // horodatage par ligne (parallèle) — ancrage des notes-citations (FR-25)
+  noteStamp: null,  // horodatage en attente pour la prochaine note (« Noter » sur une ligne)
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -377,17 +395,43 @@ function setLiveTile(on) {
   const title = $("#last-title");
   const el = $("#last-text");
   const screen = $("#screen-dashboard");
+  const noteRow = $("#note-row");
   if (on) {
     if (title) title.textContent = "Transcription en direct";
     el.classList.add("live");
     if (screen) screen.classList.add("live-feed");
     el.textContent = "En écoute…";
     ui.liveRev = -1;   // force la récupération du texte au prochain poll
+    ui.liveLines = [];
+    ui.liveStamps = [];
+    if (noteRow) noteRow.style.display = "flex";  // prise de note en session (UC-16)
   } else {
     if (title) title.textContent = "Dernière transcription";
     el.classList.remove("live");
     if (screen) screen.classList.remove("live-feed");
+    if (noteRow) noteRow.style.display = "none";
   }
+  const noteInput = $("#note-input");
+  if (noteInput) noteInput.value = "";
+  ui.noteStamp = null;
+}
+
+// Une ligne du flux est-elle une note utilisateur ? (préfixe « [Note] » en live,
+// « [MM:SS] Note : … » en réunion — cf. live.add_note / conference.add_note.)
+function isNoteLine(line) {
+  return line.startsWith("[Note]") || /^\[\d{1,4}:[0-5]\d\] Note :/.test(line);
+}
+
+// Rend le flux ligne par ligne : les notes sont mises en valeur (US-10) et chaque
+// segment porte une action « Noter » au survol (note-citation, FR-25).
+function renderLiveLines(el, lines) {
+  el.innerHTML = lines.map((l, i) => {
+    const note = isNoteLine(l);
+    const btn = note ? "" :
+      `<button class="line-note-btn" data-i="${i}" title="Noter ce passage">` +
+      `<svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9.5 2.5l2 2L5 11l-2.6.6L3 9z"/><path d="M8.5 3.5l2 2"/></svg></button>`;
+    return `<span class="live-line${note ? " note" : ""}">${escapeHtml(l)}${btn}</span>`;
+  }).join("");
 }
 
 // Récupère le texte du flux quand de nouveaux segments sont arrivés (rev a changé).
@@ -401,8 +445,47 @@ async function pollLiveFeed(state, liveRev) {
   const el = $("#last-text");
   if (!isLiveFeed(ui.state)) return;             // le mode a pu changer pendant l'await
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  el.textContent = (data.text || "").trim() || "En écoute…";
+  ui.liveLines = (data.text || "").trim() ? (data.text || "").split("\n") : [];
+  ui.liveStamps = data.stamps || [];
+  if (!ui.liveLines.length) el.textContent = "En écoute…";
+  else renderLiveLines(el, ui.liveLines);
   if (atBottom) el.scrollTop = el.scrollHeight;  // suit le dernier segment (sauf défilement manuel)
+}
+
+// ── Notes en session (UC-16) ─────────────────────────────────────────────────
+// Champ sous la tuile (Entrée/bouton = valider ; vide = ignorée, US-10) et action
+// « Noter » sur une ligne du flux (citation ancrée à l'horodatage du segment).
+async function submitNote() {
+  const input = $("#note-input");
+  const text = (input.value || "").trim();
+  if (!text) return;                             // note vide ignorée silencieusement
+  const r = (await call("add_note", text, ui.noteStamp)) || {};
+  if (r.ok) { input.value = ""; ui.noteStamp = null; }
+}
+
+function quoteLine(i) {
+  const line = ui.liveLines[i] || "";
+  // Citation sans l'horodatage de tête (réunion) : le stamp est transmis à part.
+  const text = line.replace(/^\[\d{1,4}:[0-5]\d(:[0-5]\d)?\]\s*/, "");
+  const input = $("#note-input");
+  input.value = "Citation : « " + text + " » — ";
+  ui.noteStamp = ui.liveStamps[i] || null;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function bindNotes() {
+  $("#note-add").addEventListener("click", submitNote);
+  $("#note-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); submitNote(); }
+  });
+  // Champ vidé à la main : la note suivante reprend l'horodatage « maintenant ».
+  $("#note-input").addEventListener("input", e => { if (!e.target.value.trim()) ui.noteStamp = null; });
+  // Délégation : les lignes du flux sont re-rendues à chaque nouveau segment.
+  $("#last-text").addEventListener("click", e => {
+    const btn = e.target.closest(".line-note-btn");
+    if (btn) quoteLine(+btn.dataset.i);
+  });
 }
 
 // Source audio (sortie système) des modes loopback — équivalent inline des
@@ -479,11 +562,12 @@ async function loadConfig() {
   $("#cfg-delai").value = c.delai;
   $("#delai-label").textContent = c.delai + " ms";
 
-  // IA
+  // IA (raffinage de dictée + résumé de fin de session — même LLM local)
   setSwitch($("#ia-switch"), c.ia);
+  setSwitch($("#resume-switch"), c.resume);
   $("#cfg-ia-endpoint").value = c.iaEndpoint || "";
   $("#cfg-ia-model").value = c.iaModel || "";
-  applyIaState(c.ia);
+  applyIaState(c.ia || c.resume);
 
   // Confidentialité
   setSwitch($("#local-switch"), c.localOnly);
@@ -572,6 +656,8 @@ async function installGpu() {
   refreshGpuStatus();  // bascule en mode « running » + démarre le polling
 }
 
+// Les champs endpoint/modèle servent au raffinage ET au résumé de session :
+// actifs dès que l'un des deux usages est activé.
 function applyIaState(on) {
   const f = $("#ia-fields");
   f.style.opacity = on ? "1" : "0.4";
@@ -594,7 +680,12 @@ function bindConfig() {
   }));
 
   $("#ia-switch").addEventListener("click", () => {
-    ui.cfg.ia = !ui.cfg.ia; setSwitch($("#ia-switch"), ui.cfg.ia); applyIaState(ui.cfg.ia);
+    ui.cfg.ia = !ui.cfg.ia; setSwitch($("#ia-switch"), ui.cfg.ia);
+    applyIaState(ui.cfg.ia || ui.cfg.resume);
+  });
+  $("#resume-switch").addEventListener("click", () => {
+    ui.cfg.resume = !ui.cfg.resume; setSwitch($("#resume-switch"), ui.cfg.resume);
+    applyIaState(ui.cfg.ia || ui.cfg.resume);
   });
   $("#cfg-ia-endpoint").addEventListener("input", e => { ui.cfg.iaEndpoint = e.target.value; });
   $("#cfg-ia-model").addEventListener("input", e => { ui.cfg.iaModel = e.target.value; });
@@ -646,6 +737,7 @@ async function saveConfig() {
     mic: ui.cfg.mic, vad: ui.cfg.vad, silence: ui.cfg.silence, combo: ui.cfg.combo,
     injection: ui.cfg.injection, delai: ui.cfg.delai,
     ia: ui.cfg.ia, iaEndpoint: ui.cfg.iaEndpoint, iaModel: ui.cfg.iaModel,
+    resume: ui.cfg.resume,
     localOnly: ui.cfg.localOnly,
   };
   await call("save_config", payload);
@@ -670,7 +762,7 @@ const CAT = {
 function categoryOf(source) {
   const s = (source || "").toLowerCase();
   if (s.includes("réunion") || s.includes("reunion") || s.includes("conf")) return "conference";
-  if (s === "live") return "live";
+  if (s.includes("live")) return "live";  // « live » et « résumé live » (UC-17)
   return "dictee";
 }
 function srcLabel(source) {
@@ -858,7 +950,9 @@ function bindNav() {
     call("set_source", ui.source);
   });
   $("#copy-last").addEventListener("click", () => {
-    const t = $("#last-text").textContent;
+    // En flux direct, le texte est rendu ligne par ligne (spans) : textContent ne
+    // conserverait pas les retours à la ligne — on copie depuis les lignes.
+    const t = isLiveFeed(ui.state) ? ui.liveLines.join("\n") : $("#last-text").textContent;
     call("copy_text", t);
     const span = $("#copy-last span"); const old = span.textContent;
     span.textContent = "Copié"; span.classList.add("copied");
@@ -870,6 +964,7 @@ function init() {
   bindNav();
   bindConfig();
   bindHistory();
+  bindNotes();
   bindTitlebar();
   renderStatus("idle");
   renderModeDesc();

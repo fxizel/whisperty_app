@@ -150,6 +150,40 @@ class ConferenceConfig:
 
 
 @dataclass
+class SummaryConfig:
+    """Résumé de fin de session live/réunion par le LLM **local** (V2, UC-17).
+
+    Opt-in, indépendant de ``ai.enabled`` (raffinage de dictée) mais utilisant le
+    MÊME serveur local (``ai.endpoint``/``ai.model``, garde localhost identique).
+    Jamais bloquant : sans LLM, la session se termine et s'archive normalement,
+    simplement sans résumé.
+    """
+
+    enabled: bool = False
+    prompt: str = (
+        "Tu résumes en français la transcription d'une réunion ou d'une écoute "
+        "audio. Réponds en points concis : sujets abordés, décisions prises, "
+        "actions à faire (avec responsable si mentionné). N'invente rien ; si le "
+        "texte est trop court ou décousu, dis-le simplement."
+    )
+    timeout: float = 120.0   # un transcript entier est bien plus long qu'une dictée
+    max_chars: int = 24000   # tronque l'entrée du LLM (début + fin conservés) au-delà
+
+
+@dataclass
+class NotesConfig:
+    """Notes en session live/réunion (V2, UC-16).
+
+    La saisie de notes dans la fenêtre est toujours disponible pendant un live/une
+    réunion ; seul le raccourci global du « signet » (note horodatée sans texte,
+    posée même sans focus sur la fenêtre) est paramétrable ici. Format pynput,
+    comme ``hotkey.combo`` ; doit en différer. Vide/None = signet désactivé.
+    """
+
+    bookmark_hotkey: str = "<ctrl>+<alt>+n"
+
+
+@dataclass
 class GuiConfig:
     """Interface fenêtre (WebView2 via pywebview, V2).
 
@@ -174,6 +208,8 @@ class Config:
     profiles: ProfilesConfig = field(default_factory=ProfilesConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
     conference: ConferenceConfig = field(default_factory=ConferenceConfig)
+    notes: NotesConfig = field(default_factory=NotesConfig)
+    summary: SummaryConfig = field(default_factory=SummaryConfig)
     gui: GuiConfig = field(default_factory=GuiConfig)
     base_dir: Path = field(default_factory=Path.cwd)
 
@@ -221,6 +257,8 @@ class Config:
             profiles=_build_profiles(data.get("profiles")),
             live=_build(LiveConfig, data.get("live")),
             conference=_build(ConferenceConfig, data.get("conference")),
+            notes=_build(NotesConfig, data.get("notes")),
+            summary=_build(SummaryConfig, data.get("summary")),
             gui=_build(GuiConfig, data.get("gui")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()

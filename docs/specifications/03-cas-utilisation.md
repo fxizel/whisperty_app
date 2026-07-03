@@ -40,9 +40,10 @@ graph LR
       UC14[UC-14 Obtenir le modèle initial]
       UC15[UC-15 Activer l'accélération GPU]
       UC16[UC-16 Prendre des notes en session]
+      UC17[UC-17 Résumer une session]
     end
 
-    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12 & UC16
+    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12 & UC16 & UC17
     A --> UC12 & UC13 & UC14 & UC15
 
     UC01 -. include .-> UC02
@@ -53,6 +54,8 @@ graph LR
     UC07 -. extend .-> UC06
     UC09 -. extend .-> UC16
     UC10 -. extend .-> UC16
+    UC09 -. extend .-> UC17
+    UC10 -. extend .-> UC17
 ```
 
 > `include` = sous-fonction toujours exécutée ; `extend` = comportement optionnel/conditionnel.
@@ -98,6 +101,7 @@ journalisé), jamais mis en file.
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
 | UC-15 | Activer l'accélération GPU NVIDIA | Administrateur | C | P-06 |
 | UC-16 | Prendre des notes pendant une session (live / réunion) | Utilisateur | C | P-02, P-05 |
+| UC-17 | Résumer une session (live / réunion) par IA locale | Utilisateur / Système | C | P-02, P-05 |
 
 > Le persona **P-03 (RSSI/DPO)** n'apparaît pas en colonne « Personas » : il agit comme
 > **acteur-contrainte** (validation du zéro-réseau, `CO-01…03`) plutôt qu'en utilisateur direct.
@@ -432,3 +436,32 @@ en une transcription continue sans étiquette de locuteur.
 
 **Règles** : BR-01 (le signet hors session est ignoré), BR-06 (les notes suivent le résultat copié/exporté, jamais injecté), BR-07 (ancrage chronologique).
 **Exigences liées** : FR-23…FR-27, US-10, RE-11, PE-06, CO-01, CO-09.
+
+---
+
+### UC-17 — Résumer une session (live / réunion) par IA locale
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur (activation) / Système (exécution automatique) |
+| **Acteur secondaire** | LLM local (cf. UC-06) |
+| **Objectif** | Obtenir, à la fin de chaque session Live continu (UC-09) ou Conférence (UC-10), un **résumé de la conversation** (sujets, décisions, actions) — sans relire tout le transcript. |
+| **Déclencheur** | Arrêt de la session, si `summary.enabled: true` (opt-in, écran Configuration ou `config.yaml`). |
+| **Préconditions** | `summary.enabled` ; serveur LLM **local** lancé (même endpoint que UC-06, activation indépendante de `ai.enabled`) ; session terminée avec du texte. |
+| **Garanties (succès)** | Le résumé est ajouté en fin de transcript (section « Résumé »), archivé dans l'historique (source `résumé live`/`résumé réunion`) et notifié. |
+| **Garanties minimales** | Échec du LLM (absent, muet, timeout) : le transcript et l'historique de la session, déjà archivés, sont **intacts** ; notification d'indisponibilité ; l'application reste pleinement opérationnelle. |
+
+**Scénario nominal**
+1. L'utilisateur arrête la session ; le flux normal de fin s'exécute (export, historique, notification, retour `IDLE`).
+2. Le système lance le résumé **en arrière-plan** (l'appel LLM peut durer des dizaines de secondes ; une nouvelle dictée est possible immédiatement).
+3. Le transcript (tronqué début+fin au-delà de `summary.max_chars`) est envoyé au LLM **local** avec le prompt de résumé (points concis : sujets, décisions, actions).
+4. Le résumé est ajouté au transcript (`# Résumé`, `## Résumé` en `.md` — après la section « Notes » d'UC-16 le cas échéant), archivé dans l'historique et notifié.
+
+**Extensions / exceptions**
+- *3a. Endpoint non local* : **refusé** par la garde commune (CO-03) — le transcript ne quitte jamais la machine ; pas de résumé.
+- *3b. LLM absent / muet / réponse invalide* : notification d'indisponibilité, aucun autre effet (session déjà archivée).
+- *4a. Transcript non inscriptible* : le résumé reste disponible via l'historique.
+- *Fermeture de l'application pendant le résumé* : abandon silencieux (best-effort) ; la session archivée est intacte.
+
+**Règles** : BR-06 (le résumé n'est jamais injecté).
+**Exigences liées** : FR-28, RE-12, CO-01, CO-03.

@@ -69,11 +69,11 @@ ai:
   # Raffinage optionnel par un LLM 100 % LOCAL (reponctuation, casse, fautes).
   # CONFIDENTIALITÉ : seuls les endpoints locaux (localhost/127.0.0.1) sont acceptés ;
   # tout autre hôte est refusé. Désactivé par défaut.
-  enabled: false
+  enabled: true
   # Endpoint compatible OpenAI d'un serveur local : Ollama (11434), LM Studio (1234),
   # llama.cpp server… Exemple Ollama : http://localhost:11434/v1/chat/completions
-  endpoint: "http://localhost:11434/v1/chat/completions"
-  model: "llama3.2"       # nom du modèle servi localement
+  endpoint: "http://localhost:1234/v1/chat/completions"
+  model: google/gemma-4-e4b # nom du modèle servi localement
   prompt: >-
     Tu corriges la ponctuation, la casse et les fautes évidentes d'un texte dicté
     en français. Ne reformule pas, n'ajoute rien, ne réponds que par le texte corrigé.
@@ -130,4 +130,34 @@ conference:
   distinguish_speakers: true
   mic_label: "Moi"
   system_label: "Interlocuteurs"
+
+notes:
+  # Notes en session — modes Live continu et Conférence uniquement. Saisie dans la
+  # fenêtre (champ sous la transcription en direct, Entrée pour valider), action
+  # « Noter » sur un segment du flux (citation), ou « signet » horodaté posé par un
+  # raccourci global (fonctionne même sans focus sur la fenêtre). Les notes sont
+  # entrelacées chronologiquement dans le transcript (préfixe [Note] / « Note : »)
+  # et récapitulées en fin de fichier. 100 % local, comme le reste.
+  # bookmark_hotkey : format pynput (cf. hotkey.combo). DOIT différer du raccourci
+  # de dictée ; éviter Win+Space. "" (vide) = signet désactivé (la saisie dans la
+  # fenêtre reste disponible). Raccourci invalide => signet désactivé (journalisé).
+  bookmark_hotkey: "<ctrl>+<alt>+n"
+
+summary:
+  # Résumé de fin de session (modes Live continu et Conférence) par le LLM LOCAL.
+  # Utilise le serveur de la section ai: (endpoint/model, garde localhost identique)
+  # mais s'active INDÉPENDAMMENT de ai.enabled (le raffinage de dictée). À l'arrêt
+  # d'une session, le résumé est généré en arrière-plan (l'app est déjà disponible),
+  # ajouté au transcript (section "# Résumé"), archivé dans l'historique (source
+  # "résumé live"/"résumé réunion") et notifié. LLM absent/muet => pas de résumé,
+  # la session reste archivée normalement (jamais bloquant). 100 % local.
+  enabled: true
+  # prompt : consigne du résumé (français, points concis, décisions et actions).
+  prompt: >-
+    Tu résumes en français la transcription d'une réunion ou d'une écoute audio.
+    Réponds en points concis : sujets abordés, décisions prises, actions à faire
+    (avec responsable si mentionné). N'invente rien ; si le texte est trop court
+    ou décousu, dis-le simplement.
+  timeout: 120            # secondes (un transcript entier est plus long qu'une dictée)
+  max_chars: 24000        # tronque l'entrée du LLM au-delà (début + fin conservés)
 

@@ -151,6 +151,18 @@ class GuiApi:
             self._mode = mode
         return {"ok": True}
 
+    def add_note(self, text: Optional[str] = None, stamp: Optional[str] = None) -> dict:
+        """Note utilisateur pendant une session live/réunion (UC-16).
+
+        ``stamp`` optionnel = horodatage du segment cité (action « Noter » sur une
+        ligne du flux) ; sinon la note est horodatée au moment de la validation.
+        """
+        try:
+            return self._app.add_note(text, stamp)
+        except Exception:  # noqa: BLE001
+            logger.exception("add_note a échoué")
+            return {"ok": False, "error": "Note impossible (voir logs)."}
+
     def toggle_record(self) -> dict:
         """Démarre/arrête selon le mode courant et l'état (délègue à WhispertyApp)."""
         from .tray import TrayState
@@ -286,6 +298,7 @@ class GuiApi:
             "ia": bool(c.ai.enabled),
             "iaEndpoint": c.ai.endpoint,
             "iaModel": c.ai.model,
+            "resume": bool(c.summary.enabled),
             "localOnly": bool(c.transcription.local_files_only),
         }
 
