@@ -20,6 +20,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-13 Packaging/autostart | | | ○ | | | ● |
 | UC-14 Modèle initial | ○ | ○ | ○ | ○ | ○ | ● |
 | UC-15 GPU | ○ | | | | | ● |
+| UC-16 Notes en session | | ○ | | | ● | |
 
 > P-03 (RSSI) « consomme » surtout les **contraintes** (CO-01…03) plutôt que les UC : elle
 > valide le comportement zéro-réseau, transverse à tous les cas d'utilisation.
@@ -46,6 +47,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-13 Packaging | FR-17 | SU-04, CO-08, CO-11 |
 | UC-14 Modèle initial | FR-18 | PE-02, CO-01, CO-02 |
 | UC-15 GPU | FR-03 | PE-01, CO-12 |
+| UC-16 Notes en session | FR-23, FR-24, FR-25, FR-26, FR-27 | US-10, RE-11, PE-06, CO-01, CO-09, BR-01, BR-06, BR-07 |
 
 ## 3. Couverture inverse Exigence → Cas d'utilisation
 
@@ -74,6 +76,11 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-20 | UC-01, UC-07, UC-09, UC-10 |
 | FR-21 | UC-01, UC-12 |
 | FR-22 | UC-06 |
+| FR-23 | UC-16 |
+| FR-24 | UC-16 |
+| FR-25 | UC-16 |
+| FR-26 | UC-16 |
+| FR-27 | UC-16 (exclusion documentée — Won't) |
 | US-01 | UC-01, UC-02 |
 | US-02 | UC-07, UC-08, UC-09, UC-10, UC-12 |
 | US-03 | UC-01 |
@@ -83,6 +90,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | US-07 | UC-07, UC-09, UC-10 |
 | US-08 | UC-02 |
 | US-09 | UC-09, UC-10 |
+| US-10 | UC-16 |
 | RE-01 | UC-01 |
 | RE-02 | UC-01, UC-07 |
 | RE-03 | UC-03 |
@@ -93,11 +101,13 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RE-08 | UC-09, UC-10 |
 | RE-09 | UC-10 |
 | RE-10 | UC-08, UC-09, UC-10 |
+| RE-11 | UC-16 |
 | PE-01 | UC-01, UC-15 |
 | PE-02 | UC-01, UC-14 |
 | PE-03 | UC-01, UC-09, UC-10 |
 | PE-04 | UC-03, UC-09 |
 | PE-05 | UC-01 |
+| PE-06 | UC-16 |
 | SU-01 | UC-12 |
 | SU-02 | UC-04 |
 | SU-03 | UC-08 (+ transverse) |
@@ -106,7 +116,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | SU-06 | transverse (architecture) |
 | SU-07 | transverse (conventions) |
 | SU-08 | UC-08, UC-12 |
-| CO-01 | UC-01, UC-06, UC-14 (+ transverse, cardinal) |
+| CO-01 | UC-01, UC-06, UC-14, UC-16 (+ transverse, cardinal) |
 | CO-02 | UC-14 |
 | CO-03 | UC-06 |
 | CO-04 | UC-10 |
@@ -114,7 +124,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-06 | UC-09, UC-10 |
 | CO-07 | UC-07 |
 | CO-08 | UC-13 |
-| CO-09 | UC-02 |
+| CO-09 | UC-02, UC-16 |
 | CO-10 | UC-05 |
 | CO-11 | UC-13 |
 | CO-12 | UC-15 |
@@ -122,12 +132,13 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-14 | transverse (packaging/nommage) |
 | CO-15 | transverse (plateforme) |
 | CO-16 | UC-10 |
-| BR-01 | UC-01, UC-02 (exclusivité, transverse aux modes) |
+| BR-01 | UC-01, UC-02, UC-16 (exclusivité, transverse aux modes) |
 | BR-02 | UC-01 |
 | BR-03 | UC-01, UC-04, UC-06 |
 | BR-04 | UC-01 |
 | BR-05 | UC-10 |
-| BR-06 | UC-07, UC-09, UC-10 |
+| BR-06 | UC-07, UC-09, UC-10, UC-16 |
+| BR-07 | UC-16 |
 
 > **Conclusion** : aucune exigence orpheline — chaque exigence (FR/US/RE/PE/SU/CO) et chaque
 > règle de gestion (BR) sert ≥ 1 UC ou est explicitement **transverse**. Les exigences purement
@@ -149,6 +160,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RSK-08 | **Modèle non pré-téléchargé** au premier lancement hors-ligne. | Moyen | Moyen | Procédure dédiée (UC-14) ; message d'erreur explicite ; `local_files_only` documenté. |
 | RSK-09 | **Corruption d'injection** des accents en mode `type` (frappe). | Faible | Faible | Collage par défaut (BR-04) ; `type` réservé au repli. |
 | RSK-10 | **Perte du transcript de réunion** si arrêt brutal. | Moyen | Faible | Écriture au fil de l'eau (live) + archivage avant fermeture de base (RE-10). |
+| RSK-11 | **Raccourci signet inopérant** (conflit avec une autre application) → prise de note mains occupées impossible en réunion. | Faible | Moyen | Raccourci configurable et distinct de la dictée (FR-24, CO-09) ; échec d'enregistrement signalé, non bloquant ; la saisie dans la fenêtre reste disponible. |
 
 ## 5. Questions ouvertes / à valider
 
@@ -163,15 +175,16 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | Q-07 | Doit-on cibler explicitement des **objectifs de latence chiffrés** (ex. < N s pour une phrase) par profil matériel ? | P-01, P-06 |
 | Q-08 | Faut-il un mécanisme de **mise à jour** de l'application compatible zéro-réseau (paquet hors-ligne signé) ? | P-06, P-03 |
 | Q-09 | La garde IA (`CO-03`) accepte un **hôte vide** (`""`) et `[::1]` en plus de localhost/127.0.0.1/::1 : faut-il **rejeter l'hôte vide** par rigueur (URL malformée), même s'il n'envoie rien hors machine ? | P-03 |
+| Q-10 | Notes en session (UC-16) : les deux choix ergonomiques retenus — horodatage de la note textuelle **à la validation** (pas au début de saisie) et **signet sans texte** complété après la session (plutôt qu'une mini-saisie surgissante, intrusive en réunion) — conviennent-ils à l'usage réel ? | P-02, P-05 |
 
 ## 6. Statut de couverture FURPS
 
 | Catégorie | Nb exigences | Couverture personas |
 |-----------|:------------:|---------------------|
-| Functionality (FR) | 22 | P-01 → P-06 |
-| Usability (US) | 9 | P-01, P-04 (priorité), tous |
-| Reliability (RE) | 10 | P-04, P-02 (priorité), tous |
-| Performance (PE) | 5 | P-01, P-05, P-06 |
+| Functionality (FR) | 26 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
+| Usability (US) | 10 | P-01, P-04 (priorité), tous |
+| Reliability (RE) | 11 | P-04, P-02 (priorité), tous |
+| Performance (PE) | 6 | P-01, P-05, P-06 |
 | Supportability (SU) | 8 | P-06 (priorité), mainteneurs |
 | Contraintes (CO) | 16 | P-03 (priorité), tous |
 | Règles de gestion (BR) | 7 | transverse |

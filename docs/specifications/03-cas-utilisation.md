@@ -39,9 +39,10 @@ graph LR
       UC13[UC-13 Packager / démarrage auto]
       UC14[UC-14 Obtenir le modèle initial]
       UC15[UC-15 Activer l'accélération GPU]
+      UC16[UC-16 Prendre des notes en session]
     end
 
-    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12
+    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12 & UC16
     A --> UC12 & UC13 & UC14 & UC15
 
     UC01 -. include .-> UC02
@@ -50,6 +51,8 @@ graph LR
     UC01 -. extend .-> UC05
     UC01 -. extend .-> UC06
     UC07 -. extend .-> UC06
+    UC09 -. extend .-> UC16
+    UC10 -. extend .-> UC16
 ```
 
 > `include` = sous-fonction toujours exécutée ; `extend` = comportement optionnel/conditionnel.
@@ -94,6 +97,7 @@ journalisé), jamais mis en file.
 | UC-13 | Packager / activer le démarrage automatique | Administrateur | C | P-06 |
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
 | UC-15 | Activer l'accélération GPU NVIDIA | Administrateur | C | P-06 |
+| UC-16 | Prendre des notes pendant une session (live / réunion) | Utilisateur | C | P-02, P-05 |
 
 > Le persona **P-03 (RSSI/DPO)** n'apparaît pas en colonne « Personas » : il agit comme
 > **acteur-contrainte** (validation du zéro-réseau, `CO-01…03`) plutôt qu'en utilisateur direct.
@@ -389,3 +393,42 @@ en une transcription continue sans étiquette de locuteur.
 
 **Contrainte** : CPU et CUDA uniquement — **pas** de DirectML (AMD/Intel restent en CPU `int8`).
 **Exigences liées** : FR-03, PE-01, CO-12.
+
+---
+
+### UC-16 — Prendre des notes pendant une session (live / réunion)
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur |
+| **Objectif** | Capturer pendant une session live (UC-09) ou réunion (UC-10) des **notes personnelles** horodatées (idée, action à faire, moment important), ancrées chronologiquement dans la transcription, sans quitter la réunion ni interrompre la capture. |
+| **Déclencheur** | Champ « Ajouter une note » de la fenêtre ; **ou** raccourci global « signet » ; **ou** action « Noter » sur un segment du flux en direct. |
+| **Préconditions** | État `LIVE` ou `CONFERENCE`. La saisie et « Noter » requièrent la fenêtre ouverte (US-09) ; le **signet** fonctionne fenêtre masquée. |
+| **Garanties (succès)** | Les notes figurent dans le flux affiché, dans le transcript à leur position chronologique (+ section récapitulative « Notes »), dans l'historique et dans la copie de fin de live. |
+| **Garanties minimales** | Une note qui échoue à s'écrire dans le fichier est conservée en mémoire et restituée à l'arrêt ; la capture/transcription n'est **jamais** interrompue par la prise de note. |
+
+> UC-16 n'introduit **aucun état** dans la machine à états (§3) : il s'exécute *pendant*
+> `LIVE`/`CONFERENCE` et ne modifie pas les transitions.
+
+**Scénario nominal (note textuelle)**
+1. Pendant la session, l'utilisateur saisit son texte (ex. « À faire : envoyer le budget révisé à Marc ») et valide.
+2. Le système horodate la note au moment de la **validation**, dans le référentiel du mode : position de session `[MM:SS]` en réunion (comme les segments), heure `HH:MM:SS` en live (comme le fichier).
+3. La note s'insère dans le flux affiché, **visuellement distincte** des segments transcrits (préfixe stable, ex. `[Note]`).
+4. La note est écrite au fil de l'eau dans le fichier transcript, sur sa propre ligne ; le champ de saisie se vide.
+
+**Variantes**
+- *Signet (mains occupées)* : un appui sur le raccourci global dédié crée immédiatement une note-signet horodatée **sans texte** (ex. `[Note] Moment marqué`), même sans focus sur la fenêtre ; retour discret (ligne dans la tuile, notification brève si fenêtre masquée). L'utilisateur la complète après la session, le segment transcrit voisin fournissant le contexte. Des appuis rapprochés créent des signets distincts.
+- *Note depuis un segment* : « Noter » sur une ligne du flux pré-remplit le champ avec la **citation** du segment ; l'utilisateur peut ajouter un commentaire (optionnel) avant de valider. La note reprend l'horodatage **du segment cité**, pas celui du clic.
+
+**Extensions / exceptions**
+- *1a. Note vide* (texte vide ou blanc) : ignorée silencieusement, pas d'erreur.
+- *4a. Transcript non inscriptible* : la note est conservée en mémoire et restituée à l'arrêt via l'historique et l'export ; la session continue (cohérent avec le comportement live existant).
+- *4b. Réunion avec distinction par locuteur* : la note est incluse dans le **tri chronologique final** (réécriture triée), entrelacée avec les lignes `Moi`/`Interlocuteurs`.
+- *Signet hors session* (`IDLE`, dictée…) : **no-op journalisé** (cohérent BR-01), aucun effet de bord.
+- *Session arrêtée entre la saisie et la validation* : la note est rattachée à la session qui vient de se terminer (dernier horodatage) plutôt que perdue.
+- *Raccourci signet non enregistrable* (conflit) : signalé (log + UI), le reste de la session fonctionne normalement.
+
+**Hors périmètre (Won't, cette itération)** : la **note vocale** (dictée au micro pendant une session) — voir FR-27.
+
+**Règles** : BR-01 (le signet hors session est ignoré), BR-06 (les notes suivent le résultat copié/exporté, jamais injecté), BR-07 (ancrage chronologique).
+**Exigences liées** : FR-23…FR-27, US-10, RE-11, PE-06, CO-01, CO-09.
