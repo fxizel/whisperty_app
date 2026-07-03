@@ -144,7 +144,7 @@ def test_rewrite_sorted_none(tmp_path: Path) -> None:
 
     cfg = _cfg(tmp_path, distinct=True)
     ct = ConferenceTranscriber(cfg, object())
-    ct._rewrite_sorted(None, [(0.0, "Moi", "x")])  # ne lève pas, ne crée rien
+    ct._rewrite_sorted(None, [(0.0, "Moi", "x")], [])  # ne lève pas, ne crée rien
     print("[conf-x 6] _rewrite_sorted(None) : no-op sûr  OK")
 
 
