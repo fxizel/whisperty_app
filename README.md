@@ -60,16 +60,25 @@ flowchart LR
   La croix réduit dans la zone de notification ; fermeture définitive via « Quitter ».
 - 📜 **Historique SQLite local** — purge automatique, « Copier la dernière transcription » depuis le tray.
 - 📂 **Import de fichiers audio** (WAV / MP3 / M4A / FLAC…) — transcrit, copié et archivé, sans ffmpeg.
+- 🔔 **Notifications utilisateur** — micro absent, modèle manquant, erreurs de dictée et résumés de session
+  remontés dans l'interface et la zone de notification.
 
 **Modes avancés**
 - 🤖 **IA locale** (opt-in) — reponctuation/correction via un LLM sur la machine (Ollama, LM Studio…).
   Tout endpoint distant est refusé ; échec LLM = texte brut conservé.
 - 🎯 **Profils de contexte** — prompt, langue et dictionnaire s'adaptent à l'application au premier plan
   (ex. profil « code » dans VS Code, « mail » dans Outlook).
-- 🔊 **Transcription live d'une sortie audio** — loopback WASAPI continu vers un fichier `.txt` horodaté
-  (nécessite `pip install soundcard`).
+- 🔊 **Transcription live d'une sortie audio** — loopback WASAPI continu, flux en direct dans le dashboard
+  et export `.txt` horodaté.
 - 🧑‍🤝‍🧑 **Mode réunion** — capture micro + sortie système simultanés, export horodaté avec distinction
-  par locuteur (`Moi` / `Interlocuteurs`), déterministe et 100 % local.
+  par source (`Moi` / `Interlocuteurs`), déterministe et 100 % local.
+- 🗣️ **Diarisation des locuteurs** (opt-in) — au-delà de la distinction par source, étiquettes de voix
+  individuelles (`Locuteur 1`, `Locuteur 2`…) via empreinte MFCC en pur NumPy, renommables depuis
+  la fenêtre. Aucun modèle à télécharger.
+- 📝 **Notes en session** (live / réunion) — saisie dans la fenêtre, citation d'un segment ou signet
+  horodaté par raccourci global ; entrelacées chronologiquement dans le transcript.
+- 📋 **Résumé de fin de session** (opt-in) — résumé par LLM local à l'arrêt d'un live ou d'une réunion,
+  indépendant du raffinage de dictée ; ajouté au transcript et à l'historique.
 
 > ⚖️ Pensez au **consentement** des participants avant d'enregistrer une réunion.
 
@@ -124,7 +133,9 @@ la plupart des changements à chaud.
 | `ai` | `enabled`, `endpoint` (**local uniquement**), `model`, `prompt` |
 | `profiles` | `enabled`, `definitions` |
 | `live` | `device`, `max_segment`, `silence_duration`, `transcript_dir` |
-| `conference` | `system_device`, `mic_device`, `distinguish_speakers`, `export_dir` |
+| `conference` | `system_device`, `mic_device`, `distinguish_speakers`, `speaker_diarization`, `export_dir` |
+| `notes` | `bookmark_hotkey` (signet horodaté en session live/réunion) |
+| `summary` | `enabled`, `prompt`, `timeout`, `max_chars` (résumé LLM local en fin de session) |
 | `gui` | `enabled` (`false` ou `--no-gui` = tray seul) |
 
 ## Dictionnaire personnalisé
@@ -174,6 +185,10 @@ Pour activer le démarrage automatique sans installeur (build de dev) :
 
 ## Accélération GPU NVIDIA
 
+Depuis l'écran **Configuration** de la fenêtre : choisir `device: cuda`, puis cliquer sur
+**« Installer le support GPU »** (~1,3 Go, opt-in, suivi par progression). En build de dev,
+installation manuelle possible :
+
 ```powershell
 pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
@@ -181,6 +196,7 @@ pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 Puis dans `config.yaml` : `device: cuda` et `compute_type: float16`.
 
 > CTranslate2 ne supporte que **CPU et CUDA**. Les GPU **AMD / Intel** restent en CPU.
+> Si CUDA est demandé sans composants ni GPU, l'app retombe gracieusement sur le CPU int8.
 
 ## Architecture
 
@@ -191,6 +207,7 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 |------------------------|------|
 | `recorder.py` | Capture micro non bloquante (sounddevice), RMS pour VAD/tray |
 | `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne) |
+| `cuda.py` | Détection GPU/composants CUDA + installation opt-in depuis l'UI |
 | `injector.py` | Injection texte (Ctrl+V par défaut, frappe en repli) |
 | `tray.py` | Icône zone de notification (pystray) |
 | `app.py` | Orchestration / machine à états + raccourci global + surveillance VAD |
@@ -199,20 +216,11 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost) |
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |
 | `loopback.py` · `live.py` | Capture loopback (soundcard/WASAPI) + transcription live |
-| `conference.py` | Mode réunion |
+| `conference.py` · `diarization.py` | Mode réunion + diarisation des locuteurs (MFCC NumPy) |
 | `gui.py` · `web/` | Fenêtre WebView2 (pywebview) + pont Python↔JS + assets UI |
 | `configio.py` | Écriture chirurgicale de `config.yaml` (préserve commentaires/ordre) |
 | `modeldl.py` | Téléchargement opt-in du modèle depuis l'UI (bannière du dashboard) |
 | `singleinstance.py` | Instance unique (relancer l'exe réaffiche la fenêtre) |
 
 Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md).
-
-## Feuille de route
-
-- [x] Capture audio
-- [x] Transcription Whisper locale
-- [x] Injection de texte system-wide
-- [x] Raccourci global + icône tray + configuration YAML
-- [x] Packaging (exe) + démarrage automatique
-- [x] **V2** — import audio, IA locale, historique SQLite, profils, transcription live, mode réunion
-- [x] **Interface fenêtre** (WebView2) — dashboard, configuration visuelle, historique navigable
+Spécifications fonctionnelles : [`docs/specifications/`](docs/specifications/).
