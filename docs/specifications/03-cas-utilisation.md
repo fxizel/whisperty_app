@@ -374,8 +374,8 @@ en une transcription continue sans étiquette de locuteur.
 - *Nombre maximal de locuteurs* : `speaker_diarization.max_speakers` borne la détection (défaut documenté) pour limiter les faux positifs en salle bruyante.
 
 **Extensions / exceptions**
-- *Modèle de diarisation absent* : proposition de téléchargement **explicite** (unique appel réseau, comme UC-14) ; refus → repli sur distinction par source (UC-10).
-- *Diarisation indisponible en exe figé* : repli gracieux sur UC-10, message journalisé.
+- *Modèle de diarisation absent* : bannière sur le tableau de bord ou l'écran Configuration proposant un **téléchargement en un clic** (poids annoncé, progression suivie — même doctrine que UC-14 / `modeldl.py`) ; refus → repli sur distinction par source (UC-10).
+- *Diarisation indisponible en exe figé sans modèle embarqué* : repli gracieux sur UC-10, message explicite (analogue UC-14).
 - *Locuteur non distingué* (voix trop proches, chevauchement) : le segment est attribué au locuteur le plus probable ou regroupé sous un libellé générique (`Locuteur ?`), sans bloquer la transcription.
 - *Échec du worker de diarisation* : la capture et la transcription Whisper continuent ; les segments déjà diarisés sont conservés, les suivants retombent sur l'étiquette de source (`Moi` / `Interlocuteurs`).
 - *Fenêtre fermée* : diarisation, export et archivage **inchangés** (affichage en direct = confort).
