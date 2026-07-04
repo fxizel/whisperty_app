@@ -42,9 +42,10 @@ graph LR
       UC15[UC-15 Activer l'accélération GPU]
       UC16[UC-16 Prendre des notes en session]
       UC17[UC-17 Résumer une session]
+      UC19[UC-19 Gérer le dictionnaire]
     end
 
-    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12 & UC16 & UC17
+    U --> UC01 & UC02 & UC07 & UC08 & UC09 & UC10 & UC12 & UC16 & UC17 & UC19
     A --> UC12 & UC13 & UC14 & UC15
 
     UC01 -. include .-> UC02
@@ -93,6 +94,7 @@ journalisé), jamais mis en file.
 | UC-02 | Déclencher / arrêter la dictée | Utilisateur | M | P-01, P-04 |
 | UC-03 | Arrêt automatique (silence / durée max) | Système | M | P-04 |
 | UC-04 | Corriger via le dictionnaire personnalisé | Utilisateur | S | P-01, P-02 |
+| UC-19 | Gérer le dictionnaire personnalisé (ajouter / modifier / supprimer) | Utilisateur | S | P-01, P-02 |
 | UC-05 | Adapter le contexte par profil applicatif | Utilisateur | C | P-01 |
 | UC-06 | Raffiner le texte par IA locale | Utilisateur | C | P-01 |
 | UC-07 | Importer et transcrire un fichier audio | Utilisateur | S | P-05 |
@@ -205,8 +207,45 @@ journalisé), jamais mis en file.
 - `terme` → **hotword** fourni au modèle pour favoriser sa reconnaissance.
 - `mauvais => correct` → **correction** appliquée *après* transcription (post-traitement).
 
+**Gestion des entrées** : l'ajout / la modification / la suppression des entrées se fait via **UC-19**
+(assistée par la fenêtre, ou par édition directe du fichier).
 **Préconditions** : `dictionary.enabled: true`.
 **Exigences liées** : FR-07, US-04, SU-02.
+
+---
+
+### UC-19 — Gérer le dictionnaire personnalisé
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur |
+| **Objectif** | Ajouter, modifier et supprimer les entrées du dictionnaire (termes favorisés et corrections) sans éditer le fichier à la main, et voir la prise en compte sans redémarrer. |
+| **Déclencheur** | Écran « Dictionnaire » de la fenêtre ; **ou** (mode tray seul) « Ouvrir le dictionnaire » qui ouvre `dictionary.txt` dans l'éditeur par défaut. |
+| **Préconditions** | App lancée. L'édition assistée requiert la fenêtre ouverte (WebView2, US-09) ; l'édition du fichier fonctionne **toujours** (repli mode tray seul, CO-08). L'**effet** à la transcription requiert `dictionary.enabled: true` (UC-04), mais l'édition reste possible même désactivé. |
+| **Garanties (succès)** | Les entrées sont écrites dans `dictionary.txt` en **préservant commentaires et ordre** ; le dictionnaire est **rechargé à chaud** (prochaine dictée), sans redémarrage ni aucune sortie réseau. |
+| **Garanties minimales** | En cas d'échec d'écriture (droits, fichier verrouillé), l'ancien contenu est **préservé**, une erreur est notifiée, aucune entrée n'est perdue. |
+
+> UC-19 n'introduit **aucun état** dans la machine à états (§3) : l'édition se fait hors dictée ;
+> une édition pendant un mode actif ne prend effet qu'au prochain chargement du dictionnaire.
+
+**Scénario nominal (édition assistée par la fenêtre)**
+1. L'utilisateur ouvre l'écran « Dictionnaire » ; la fenêtre liste les entrées existantes, séparées en **termes favorisés** (hotwords) et **corrections** (`mauvais => correct`), lues depuis `dictionary.txt`.
+2. Il **ajoute** un terme (ex. `faster-whisper`) ou une correction (ex. `whispeurtie => Whisperty`), **modifie** ou **supprime** une entrée existante.
+3. À l'enregistrement, le système réécrit `dictionary.txt` **ligne par ligne** — préservation des commentaires `#` et de l'ordre (même doctrine que `configio.py` pour `config.yaml`, sans `ruamel`) ; les lignes vides/blanches sont ignorées et les doublons dédupliqués.
+4. Le dictionnaire est **rechargé** (reconstruction de l'index hotwords/corrections, comme lors d'un `apply_config`) : la prochaine dictée en bénéficie **sans relance**.
+5. Une notification confirme (ex. « N termes, M corrections »).
+
+**Variantes**
+- *Édition directe du fichier (repli / mode tray seul)* : « Ouvrir le dictionnaire » ouvre `dictionary.txt` dans l'éditeur système (analogue à UC-12 pour `config.yaml`) ; la prise en compte se fait à la **relance**.
+
+**Extensions / exceptions**
+- *Entrée vide ou invalide* : ignorée silencieusement (cohérent avec `load_dictionary`), sans erreur.
+- *Nature de l'entrée* : déterminée par la présence de `=>` — sans `=>` = **hotword** ; avec `=>` = **correction** (indexée en minuscules, mot entier, insensible à la casse).
+- *Fichier absent* : il est créé à l'enregistrement de la première entrée.
+- *2a. Échec d'écriture* (droits insuffisants, fichier verrouillé) : le contenu existant reste **inchangé**, l'erreur est notifiée ; l'édition n'affecte jamais une dictée en cours.
+
+**Règles** : BR-03 (ordre de post-traitement inchangé), CO-01 (édition 100 % locale), CO-08 (`dictionary.txt` éditable à côté de l'exe, non embarqué).
+**Exigences liées** : FR-33, FR-07, FR-17, US-05, SU-02, CO-01, CO-08.
 
 ---
 

@@ -1393,6 +1393,200 @@ def test_session_notes(tmp_path: Path) -> None:
     print("[21] notes en session : live + réunion (ancrage, tri, récapitulatif, RE-11)  OK")
 
 
+def test_dictionary_edit(tmp_path: Path) -> None:
+    """UC-19 : écriture chirurgicale (commentaires/ordre préservés) + parse_entries."""
+    from whisperty.dictionary import (
+        ensure_dictionary_file,
+        load_dictionary,
+        parse_entries,
+        update_dictionary_file,
+    )
+
+    base = tmp_path or Path(__file__).resolve().parent
+    dic = base / "tmp_edit.txt"
+    dic.write_text(
+        "# En-tête\n"
+        "# --- section A ---\n"
+        "HTA\n"
+        "Whisperty\n"
+        "mauvais => bon\n"
+        "\n"
+        "# --- section B ---\n"
+        "SCADA\n",
+        encoding="utf-8",
+    )
+
+    # parse_entries : ordre du fichier, commentaires/blancs ignorés.
+    entries = parse_entries(dic)
+    assert [e["kind"] for e in entries] == ["hotword", "hotword", "correction", "hotword"]
+    assert entries[0] == {"kind": "hotword", "term": "HTA", "replacement": ""}
+    assert entries[2] == {"kind": "correction", "term": "mauvais", "replacement": "bon"}
+
+    # Édition : supprime HTA, garde Whisperty/SCADA, modifie le RHS d'une correction
+    # (clé « mauvais » inchangée → en place), ajoute un hotword + une correction.
+    update_dictionary_file(dic, [
+        {"kind": "hotword", "term": "Whisperty", "replacement": ""},
+        {"kind": "hotword", "term": "SCADA", "replacement": ""},
+        {"kind": "correction", "term": "mauvais", "replacement": "CORRIGE"},
+        {"kind": "hotword", "term": "faster-whisper", "replacement": ""},
+        {"kind": "correction", "term": "whispeurtie", "replacement": "Whisperty"},
+    ])
+    text = dic.read_text(encoding="utf-8")
+
+    # Commentaires ET ordre des entrées survivantes préservés.
+    assert "# En-tête" in text and "# --- section A ---" in text and "# --- section B ---" in text
+    assert "HTA" not in text.splitlines()               # supprimé (ligne exacte)
+    assert text.index("Whisperty") < text.index("SCADA")  # ordre d'origine conservé
+    assert "mauvais => CORRIGE" in text                 # RHS mis à jour EN PLACE
+    # Les nouvelles entrées sont ajoutées EN FIN de fichier (après SCADA).
+    assert text.index("SCADA") < text.index("faster-whisper")
+    assert text.index("SCADA") < text.index("whispeurtie => Whisperty")
+
+    hot, repl = load_dictionary(dic)
+    assert hot == ["Whisperty", "SCADA", "faster-whisper"]
+    assert repl == {"mauvais": "CORRIGE", "whispeurtie": "Whisperty"}
+
+    # Robustesse : entrées vides / corrections incomplètes écartées, doublons dédupliqués.
+    update_dictionary_file(dic, [
+        {"kind": "hotword", "term": "  "},                       # vide → ignoré
+        {"kind": "hotword", "term": "Dup"},
+        {"kind": "hotword", "term": "Dup"},                      # doublon → une seule fois
+        {"kind": "correction", "term": "x", "replacement": ""},  # côté droit vide → ignoré
+    ])
+    hot2, repl2 = load_dictionary(dic)
+    assert hot2 == ["Dup"] and repl2 == {}
+
+    # Fichier absent : création avec en-tête ; ensure_dictionary_file idempotent.
+    fresh = base / "sub" / "new_dico.txt"
+    update_dictionary_file(fresh, [{"kind": "hotword", "term": "Alpha"}])
+    ftext = fresh.read_text(encoding="utf-8")
+    assert ftext.startswith("#") and "Alpha" in ftext
+    ensure_dictionary_file(fresh)  # ne doit pas écraser
+    assert "Alpha" in fresh.read_text(encoding="utf-8")
+    created = base / "sub2" / "auto.txt"
+    ensure_dictionary_file(created)
+    assert created.is_file() and created.read_text(encoding="utf-8").startswith("#")
+
+    dic.unlink()
+    print("[23] dictionnaire — édition : préservation commentaires/ordre, dédup, création  OK")
+
+
+def test_dictionary_hot_reload(tmp_path: Path) -> None:
+    """UC-19 : rechargement à chaud (transcriber + profils) sans reset modèle."""
+    import types as _types
+
+    import numpy as np
+
+    from whisperty.config import Config, ProfileDef, ProfilesConfig, TranscriptionConfig
+    from whisperty.dictionary import update_dictionary_file
+    from whisperty.profiles import ProfileResolver
+    from whisperty.transcriber import Transcriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+
+    class FakeModel:
+        def transcribe(self, audio, language=None, beam_size=None,
+                       initial_prompt=None, hotwords=None, vad_filter=None):
+            seg = _types.SimpleNamespace(text="dis motclef et corrigemoi", start=0.0, end=1.0)
+            return [seg], _types.SimpleNamespace(language=language)
+
+    # -- Transcriber.set_dictionary : appliqué à la transcription suivante (profil None) --
+    t = Transcriber(TranscriptionConfig(language="fr"), hotwords=[], replacements={})
+    model = FakeModel()
+    t._model = model  # court-circuite load()
+    t.set_dictionary(["motclef"], {"corrigemoi": "corrigé"})
+    out = t.transcribe(np.ones(10, dtype=np.float32))
+    assert out == "dis motclef et corrigé", out         # correction à chaud
+    assert t._model is model                             # aucun reset (même instance)
+
+    # -- ProfileResolver.reload_dictionary : recharge la base + vide le cache --
+    dic = base / "reload_dico.txt"
+    dic.write_text("motA\nfote => faute\n", encoding="utf-8")
+    cfg = Config()
+    cfg.dictionary.path = str(dic)
+    cfg.dictionary.enabled = True
+    cfg.profiles = ProfilesConfig(enabled=True, definitions=[
+        ProfileDef(name="p", match=["app.exe"], hotwords=["pro"]),
+    ])
+    resolver = ProfileResolver(cfg)
+    prof = resolver.for_app("app.exe")
+    assert "motA" in prof.hotwords and prof.replacements.get("fote") == "faute"
+
+    # Édition du fichier puis rechargement : la nouvelle base est reflétée, cache purgé.
+    update_dictionary_file(dic, [
+        {"kind": "hotword", "term": "motB"},
+        {"kind": "correction", "term": "nuvo", "replacement": "nouveau"},
+    ])
+    resolver.reload_dictionary()
+    prof2 = resolver.for_app("app.exe")
+    assert "motB" in prof2.hotwords and "motA" not in prof2.hotwords
+    assert prof2.replacements.get("nuvo") == "nouveau" and "fote" not in prof2.replacements
+    assert "pro" in prof2.hotwords                       # hotwords inline du profil conservés
+
+    dic.unlink()
+    print("[24] dictionnaire — rechargement à chaud : transcriber + profils (sans reset)  OK")
+
+
+def test_dictionary_app_e2e(tmp_path: Path) -> None:
+    """UC-19 : chemin intégré réel WhispertyApp (= ce que GuiApi appelle)."""
+    import types as _types
+
+    import numpy as np
+
+    _install_gui_stubs()
+    _install_injection_stubs()
+    from whisperty.app import WhispertyApp
+    from whisperty.config import Config
+
+    base = tmp_path or Path(__file__).resolve().parent
+    dic = base / "app_dico.txt"
+    dic.write_text("# mon dico\nSCADA\n", encoding="utf-8")
+
+    cfg = Config()
+    cfg.dictionary.enabled = True
+    cfg.dictionary.path = str(dic)      # isole du dictionary.txt du dépôt
+    app = WhispertyApp(cfg)
+
+    class FakeModel:
+        def transcribe(self, audio, language=None, beam_size=None,
+                       initial_prompt=None, hotwords=None, vad_filter=None):
+            seg = _types.SimpleNamespace(text="dis whispeurtie", start=0.0, end=1.0)
+            return [seg], _types.SimpleNamespace(language=language)
+
+    app.transcriber._model = FakeModel()  # court-circuite load()
+
+    # get_dictionary : reflète le fichier initial.
+    d0 = app.get_dictionary()
+    assert d0["enabled"] is True and d0["hotwords"] == ["SCADA"] and d0["corrections"] == []
+
+    # apply_dictionary_from_gui : écrit + recharge à chaud, renvoie les compteurs.
+    res = app.apply_dictionary_from_gui({
+        "hotwords": ["SCADA", "faster-whisper"],
+        "corrections": [{"wrong": "whispeurtie", "right": "Whisperty"}],
+    })
+    assert res["ok"] is True and res["hotwords"] == 2 and res["corrections"] == 1
+
+    text = dic.read_text(encoding="utf-8")
+    assert "# mon dico" in text                          # commentaire préservé
+    assert "faster-whisper" in text and "whispeurtie => Whisperty" in text
+
+    # Effet à chaud SANS relance : la dictée suivante applique la nouvelle correction.
+    out = app.transcriber.transcribe(np.ones(10, dtype=np.float32))
+    assert out == "dis Whisperty", out
+
+    # Notice utilisateur émise (compteur incrémenté + texte des compteurs).
+    assert app.notice_rev() > 0
+    assert "correction" in app.notice().get("text", "")
+
+    # open_dictionary : ne lève pas ; le fichier existe (os.startfile best-effort/no-op ici).
+    app.open_dictionary()
+    assert dic.is_file()
+
+    app.quit()
+    dic.unlink()
+    print("[25] dictionnaire — E2E WhispertyApp : get/apply (écriture+chaud+notice)/open  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -1420,6 +1614,9 @@ def _run_all() -> None:
     test_conference_distinct(tmp)
     test_session_notes(tmp)
     test_session_summary()
+    test_dictionary_edit(tmp)
+    test_dictionary_hot_reload(tmp)
+    test_dictionary_app_e2e(tmp)
     print("\nTOUS LES TESTS PASSENT")
 
 

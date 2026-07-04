@@ -82,6 +82,7 @@ class Tray:
         on_toggle: Callable[[], None],
         on_quit: Callable[[], None],
         on_open_config: Optional[Callable[[], None]] = None,
+        on_open_dictionary: Optional[Callable[[], None]] = None,
         on_import_audio: Optional[Callable[[], None]] = None,
         on_copy_last: Optional[Callable[[], None]] = None,
         on_open_history: Optional[Callable[[], None]] = None,
@@ -141,6 +142,11 @@ class Tray:
                 "Ouvrir la configuration",
                 _action(on_open_config),
                 enabled=on_open_config is not None,
+            ),
+            MenuItem(
+                "Ouvrir le dictionnaire",
+                _action(on_open_dictionary),
+                enabled=on_open_dictionary is not None,
             ),
             MenuItem(
                 "Ouvrir le dossier de l'historique",

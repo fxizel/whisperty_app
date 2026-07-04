@@ -48,6 +48,16 @@ const Mock = (() => {
     words: 38 + (i * 17) % 170, source: sources[i % 3], text: texts[i % texts.length],
   }));
 
+  // Dictionnaire factice (aperçu autonome de l'onglet Dictionnaire, UC-19).
+  const dictData = {
+    enabled: true,
+    hotwords: ["faster-whisper", "Whisperty", "WebView2", "SCADA"],
+    corrections: [
+      { wrong: "whispeurtie", right: "Whisperty" },
+      { wrong: "web viou", right: "WebView2" },
+    ],
+  };
+
   // Machine à états factice (anime le visualiseur dans l'aperçu).
   let state = "idle", timer = null, mode = "dictee";
 
@@ -128,6 +138,10 @@ const Mock = (() => {
     },
     get_config: () => JSON.parse(JSON.stringify(cfg)),
     save_config: (p) => { Object.assign(cfg, p); return { ok: true }; },
+    // Dictionnaire (UC-19) : jeu d'exemple pour l'aperçu autonome.
+    get_dictionary: () => JSON.parse(JSON.stringify(dictData)),
+    save_dictionary: (p) => { dictData.hotwords = (p.hotwords || []).slice(); dictData.corrections = (p.corrections || []).map(c => ({ ...c })); return { ok: true, hotwords: dictData.hotwords.length, corrections: dictData.corrections.length }; },
+    open_dictionary: () => ({ ok: true }),
     gpu_status: () => ({ ...gpu }),
     install_gpu: () => {
       if (gpu.install === "running") return { ok: true, state: "running" };
@@ -173,6 +187,7 @@ const ui = {
   source: null,        // sortie audio choisie pour les modes loopback (null = défaut)
   sourceCount: 0,      // nombre d'options de source (sélecteur masqué si ≤ 1)
   cfg: null,
+  dict: { enabled: true, hotwords: [], corrections: [] },  // éditeur dictionnaire (UC-19)
   hist: { all: [], query: "", mode: "all", words: 0, page: 1, expanded: null },
   capturing: false,
   copiedId: null,
@@ -232,6 +247,7 @@ function setTab(tab) {
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   $$(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + tab));
   if (tab === "configuration") loadConfig();
+  if (tab === "dictionnaire") loadDictionary();
   if (tab === "historique") loadHistory();
 }
 
@@ -873,6 +889,112 @@ async function saveConfig() {
   loadDashboard(); // rafraîchit l'étiquette modèle/raccourci de la sidebar et du dashboard
 }
 
+// ───────────────────────────── Dictionnaire (UC-19) ────────────────────────
+// Éditeur structuré : deux listes (termes favorisés / corrections) éditables en
+// mémoire, enregistrées d'un bloc via save_dictionary (écriture préservant
+// commentaires/ordre + rechargement à chaud côté Python). Repli « Ouvrir le fichier ».
+async function loadDictionary() {
+  const d = (await call("get_dictionary")) || {};
+  ui.dict = {
+    enabled: d.enabled !== false,
+    hotwords: (d.hotwords || []).map(String),
+    corrections: (d.corrections || []).map(c => ({ wrong: String(c.wrong || ""), right: String(c.right || "") })),
+  };
+  const warn = $("#dict-warn");
+  if (warn) warn.style.display = ui.dict.enabled ? "none" : "block";
+  renderDictionary();
+}
+
+function renderDictionary() {
+  const dc = ui.dict || { hotwords: [], corrections: [] };
+
+  // Termes favorisés : une ligne = un champ texte + bouton suppression.
+  const hot = $("#dict-hotwords");
+  hot.innerHTML = dc.hotwords.map((_, i) =>
+    `<div class="dict-row" data-kind="hot" data-i="${i}">
+       <input type="text" class="dict-term" data-i="${i}" placeholder="terme (ex. faster-whisper)" maxlength="120">
+       <button class="dict-del" data-kind="hot" data-i="${i}" type="button" title="Supprimer">
+         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h8M5 3.5V2.3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.2M3.5 3.5l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9l.5-7"/></svg>
+       </button>
+     </div>`
+  ).join("");
+  dc.hotwords.forEach((t, i) => { const el = hot.querySelector(`.dict-term[data-i="${i}"]`); if (el) el.value = t; });
+  $("#dict-hot-empty").style.display = dc.hotwords.length ? "none" : "block";
+
+  // Corrections : deux champs (mauvais → correct) + bouton suppression.
+  const corr = $("#dict-corrections");
+  corr.innerHTML = dc.corrections.map((_, i) =>
+    `<div class="dict-row corr" data-kind="corr" data-i="${i}">
+       <input type="text" class="dict-wrong" data-i="${i}" placeholder="mauvais" maxlength="120">
+       <span class="dict-arrow">→</span>
+       <input type="text" class="dict-right" data-i="${i}" placeholder="correct" maxlength="120">
+       <button class="dict-del" data-kind="corr" data-i="${i}" type="button" title="Supprimer">
+         <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h8M5 3.5V2.3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.2M3.5 3.5l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9l.5-7"/></svg>
+       </button>
+     </div>`
+  ).join("");
+  dc.corrections.forEach((c, i) => {
+    const w = corr.querySelector(`.dict-wrong[data-i="${i}"]`); if (w) w.value = c.wrong;
+    const r = corr.querySelector(`.dict-right[data-i="${i}"]`); if (r) r.value = c.right;
+  });
+  $("#dict-corr-empty").style.display = dc.corrections.length ? "none" : "block";
+}
+
+function bindDictionary() {
+  // Édition en mémoire : les champs mettent à jour ui.dict par index (pas de re-render,
+  // pour ne pas perdre le focus pendant la frappe).
+  $("#dict-hotwords").addEventListener("input", e => {
+    const el = e.target.closest(".dict-term"); if (!el) return;
+    ui.dict.hotwords[+el.dataset.i] = el.value;
+  });
+  $("#dict-corrections").addEventListener("input", e => {
+    const row = e.target.closest(".dict-row"); if (!row) return;
+    const i = +row.dataset.i;
+    if (e.target.classList.contains("dict-wrong")) ui.dict.corrections[i].wrong = e.target.value;
+    else if (e.target.classList.contains("dict-right")) ui.dict.corrections[i].right = e.target.value;
+  });
+  // Suppression (délégation : re-render après retrait).
+  const onDelete = e => {
+    const btn = e.target.closest(".dict-del"); if (!btn) return;
+    const i = +btn.dataset.i;
+    if (btn.dataset.kind === "hot") ui.dict.hotwords.splice(i, 1);
+    else ui.dict.corrections.splice(i, 1);
+    renderDictionary();
+  };
+  $("#dict-hotwords").addEventListener("click", onDelete);
+  $("#dict-corrections").addEventListener("click", onDelete);
+
+  // Ajout d'une ligne vide (puis focus sur le nouveau champ).
+  $("#dict-add-hot").addEventListener("click", () => {
+    ui.dict.hotwords.push(""); renderDictionary();
+    const el = $(`#dict-hotwords .dict-term[data-i="${ui.dict.hotwords.length - 1}"]`); if (el) el.focus();
+  });
+  $("#dict-add-corr").addEventListener("click", () => {
+    ui.dict.corrections.push({ wrong: "", right: "" }); renderDictionary();
+    const el = $(`#dict-corrections .dict-wrong[data-i="${ui.dict.corrections.length - 1}"]`); if (el) el.focus();
+  });
+
+  $("#dict-save").addEventListener("click", saveDictionary);
+  $("#dict-open-file").addEventListener("click", () => call("open_dictionary"));
+}
+
+async function saveDictionary() {
+  const dc = ui.dict || { hotwords: [], corrections: [] };
+  // Payload nettoyé : entrées vides écartées (la normalisation fine est refaite côté Python).
+  const payload = {
+    hotwords: dc.hotwords.map(s => s.trim()).filter(Boolean),
+    corrections: dc.corrections
+      .map(c => ({ wrong: (c.wrong || "").trim(), right: (c.right || "").trim() }))
+      .filter(c => c.wrong && c.right),
+  };
+  const r = (await call("save_dictionary", payload)) || {};
+  if (r.ok === false) { showToast(r.error || "Enregistrement impossible.", "error"); return; }
+  const note = $("#dict-saved-note");
+  note.style.display = "flex";
+  clearTimeout(saveDictionary._t);
+  saveDictionary._t = setTimeout(() => { note.style.display = "none"; }, 1800);
+}
+
 // ───────────────────────────── Historique ──────────────────────────────────
 const PAGE_SIZE = 8;
 const CAT = {
@@ -1088,6 +1210,7 @@ function bindNav() {
 function init() {
   bindNav();
   bindConfig();
+  bindDictionary();
   bindHistory();
   bindNotes();
   bindTitlebar();
@@ -1106,4 +1229,4 @@ function init() {
 // quand le pont devient disponible.
 if (document.readyState !== "loading") init();
 else document.addEventListener("DOMContentLoaded", init);
-window.addEventListener("pywebviewready", () => { loadVersion(); loadDashboard(); loadSources(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "historique") loadHistory(); });
+window.addEventListener("pywebviewready", () => { loadVersion(); loadDashboard(); loadSources(); if (ui.tab === "configuration") loadConfig(); if (ui.tab === "dictionnaire") loadDictionary(); if (ui.tab === "historique") loadHistory(); });

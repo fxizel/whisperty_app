@@ -63,6 +63,14 @@
         </span>
       </button>
 
+      <button class="nav-btn" data-tab="dictionnaire">
+        <span class="hl"></span><span class="bar"></span>
+        <span class="ico">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 3.5h5.5A1.5 1.5 0 0 1 10 5v9.5"/><path d="M15 3.5H9.5A1.5 1.5 0 0 0 8 5v9.5"/><path d="M3 3.5v11h5.5M15 3.5v11H9.5"/></svg>
+          Dictionnaire
+        </span>
+      </button>
+
       <button class="nav-btn" data-tab="historique">
         <span class="hl"></span><span class="bar"></span>
         <span class="ico">
@@ -280,6 +288,59 @@
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4ade80" stroke-width="1.6"><path d="M2.5 7.5l3 3 6-7"/></svg>Configuration enregistrée
           </span>
           <button class="btn-primary sm" id="save-config"><span>Sauvegarder</span></button>
+        </div>
+      </section>
+
+      <!-- ===== DICTIONNAIRE ===== -->
+      <section id="screen-dictionnaire" class="screen" style="padding:22px 24px 0; gap:11px; min-height:100%;">
+
+        <p class="mode-desc" style="margin:2px 0 4px;">
+          <span class="accent" style="background:var(--violet)"></span>
+          <span>Termes favorisés (mieux reconnus) et corrections appliquées après transcription
+            (<span style="font-family:var(--mono); font-size:11.5px;">mauvais → correct</span>).
+            Enregistrer applique les changements <b>sans redémarrage</b>.</span>
+        </p>
+
+        <!-- Avertissement affiché quand dictionary.enabled est faux (rempli/masqué par JS). -->
+        <div class="dict-warn" id="dict-warn" style="display:none;">
+          Le dictionnaire est actuellement <b>désactivé</b> (<span style="font-family:var(--mono);">dictionary.enabled: false</span>).
+          Vous pouvez l'éditer ; il s'appliquera une fois réactivé.
+        </div>
+
+        <!-- Termes favorisés (hotwords) -->
+        <div class="accordion open" data-acc="hotwords">
+          <button class="acc-head"><span class="t"><span class="name">Termes favorisés</span><span class="desc">Mots/acronymes que Whisper doit privilégier</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div class="dict-toolbar"><button class="btn-ghost" id="dict-add-hot" type="button"><span>+ Ajouter un terme</span></button></div>
+            <div class="dict-list" id="dict-hotwords"></div>
+            <p class="dict-empty" id="dict-hot-empty" style="display:none;">Aucun terme favorisé.</p>
+          </div>
+        </div>
+
+        <!-- Corrections (mauvais => correct) -->
+        <div class="accordion open" data-acc="corrections" style="margin-bottom:8px;">
+          <button class="acc-head"><span class="t"><span class="name">Corrections</span><span class="desc">Remplacements de mots entiers, casse ignorée</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div class="dict-toolbar"><button class="btn-ghost" id="dict-add-corr" type="button"><span>+ Ajouter une correction</span></button></div>
+            <div class="dict-list" id="dict-corrections"></div>
+            <p class="dict-empty" id="dict-corr-empty" style="display:none;">Aucune correction.</p>
+          </div>
+        </div>
+
+        <!-- Barre d'enregistrement (repli « Ouvrir le fichier » + Sauvegarder) -->
+        <div class="save-bar">
+          <button class="btn-ghost" id="dict-open-file" type="button">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1 1 0 0 1 3 3.5h2.6l1 1.3H11a1 1 0 0 1 1 1v4.7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <span>Ouvrir le fichier</span>
+          </button>
+          <span class="saved-note" id="dict-saved-note" style="display:none;">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#4ade80" stroke-width="1.6"><path d="M2.5 7.5l3 3 6-7"/></svg>Dictionnaire enregistré
+          </span>
+          <button class="btn-primary sm" id="dict-save"><span>Sauvegarder</span></button>
         </div>
       </section>
 

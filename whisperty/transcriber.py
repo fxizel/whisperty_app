@@ -198,6 +198,19 @@ class Transcriber:
         """Device réellement utilisé au dernier chargement (None si pas encore chargé)."""
         return self._effective_device
 
+    def set_dictionary(
+        self, hotwords: Optional[list[str]], replacements: Optional[dict[str, str]]
+    ) -> None:
+        """Remplace le dictionnaire à chaud (édition depuis l'interface, UC-19).
+
+        Aucun ``reset()`` du modèle : hotwords et corrections sont lus **par
+        transcription** (``_resolve_params``), la prochaine dictée en bénéficie
+        immédiatement. Utilisé quand les profils sont désactivés (sinon c'est
+        ``ProfileResolver`` qui porte le dictionnaire de base).
+        """
+        self._hotwords = list(hotwords or [])
+        self._replacements = dict(replacements or {})
+
     @classmethod
     def from_config(cls, config: Config) -> "Transcriber":
         """Construit le transcripteur, dictionnaire compris, à partir de la config."""

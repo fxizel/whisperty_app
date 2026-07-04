@@ -399,6 +399,31 @@ class GuiApi:
     def save_config(self, payload: Optional[dict]) -> dict:
         return self._app.apply_config_from_gui(payload or {})
 
+    # -- dictionnaire (édition assistée, UC-19) --------------------------------
+    def get_dictionary(self) -> dict:
+        """Entrées du dictionnaire pour l'écran « Dictionnaire »."""
+        try:
+            return self._app.get_dictionary()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lecture du dictionnaire échouée")
+            return {"enabled": True, "hotwords": [], "corrections": []}
+
+    def save_dictionary(self, payload: Optional[dict]) -> dict:
+        """Enregistre le dictionnaire édité (écriture + rechargement à chaud)."""
+        try:
+            return self._app.apply_dictionary_from_gui(payload or {})
+        except Exception:  # noqa: BLE001
+            logger.exception("Enregistrement du dictionnaire échoué")
+            return {"ok": False, "error": "Enregistrement impossible (voir logs)."}
+
+    def open_dictionary(self) -> dict:
+        """Ouvre ``dictionary.txt`` dans l'éditeur système (repli)."""
+        try:
+            self._app.open_dictionary()
+        except Exception:  # noqa: BLE001
+            logger.exception("Ouverture du dictionnaire échouée")
+        return {"ok": True}
+
     # -- support GPU (CUDA) ----------------------------------------------------
     def gpu_status(self) -> dict:
         """État du support GPU pour l'écran Configuration (détection + installation).

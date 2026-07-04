@@ -134,6 +134,7 @@ class WhispertyApp:
             on_toggle=self.toggle,
             on_quit=self.quit,
             on_open_config=self.open_config,
+            on_open_dictionary=self.open_dictionary,
             on_import_audio=self.import_audio,
             on_copy_last=self.copy_last if config.history.enabled else None,
             on_open_history=self.open_history if config.history.enabled else None,
@@ -798,6 +799,98 @@ class WhispertyApp:
             os.startfile(str(path))  # type: ignore[attr-defined]  # Windows
         except Exception:  # noqa: BLE001
             logger.info("Configuration : %s", path)
+
+    def open_dictionary(self) -> None:
+        """Ouvre ``dictionary.txt`` dans l'éditeur système (repli / mode tray seul, UC-19)."""
+        from .dictionary import ensure_dictionary_file
+
+        path = self.config.resolve(self.config.dictionary.path)
+        try:
+            ensure_dictionary_file(path)  # os.startfile échouerait sur un fichier absent
+            os.startfile(str(path))  # type: ignore[attr-defined]  # Windows
+        except Exception:  # noqa: BLE001
+            logger.info("Dictionnaire : %s", path)
+
+    # -- dictionnaire (édition assistée, UC-19) --------------------------------
+    def get_dictionary(self) -> dict:
+        """Entrées du dictionnaire pour l'interface (liste ordonnée par le fichier)."""
+        from .dictionary import parse_entries
+
+        entries = parse_entries(self.config.resolve(self.config.dictionary.path))
+        hotwords = [e["term"] for e in entries if e["kind"] == "hotword"]
+        corrections = [
+            {"wrong": e["term"], "right": e["replacement"]}
+            for e in entries
+            if e["kind"] == "correction"
+        ]
+        return {
+            "enabled": bool(self.config.dictionary.enabled),
+            "hotwords": hotwords,
+            "corrections": corrections,
+        }
+
+    def apply_dictionary_from_gui(self, payload: dict) -> dict:
+        """Enregistre le dictionnaire édité dans la fenêtre, puis le recharge à chaud.
+
+        ``payload`` : ``{"hotwords": [str…], "corrections": [{"wrong","right"}…]}``.
+        Écrit ``dictionary.txt`` en préservant commentaires/ordre (``update_dictionary_file``)
+        puis rafraîchit le transcripteur ET les profils **sans relance** (le dictionnaire
+        est lu par transcription — aucun rechargement de modèle). Tout échec est capturé :
+        l'enregistrement ne doit jamais faire planter l'application.
+        """
+        from .dictionary import load_dictionary, update_dictionary_file
+
+        payload = payload or {}
+        # Construction de la liste ordonnée d'entrées (hotwords puis corrections). La
+        # normalisation fine (entrées vides, doublons) est faite par update_dictionary_file.
+        entries: list[dict] = []
+        for term in payload.get("hotwords") or []:
+            entries.append({"kind": "hotword", "term": str(term), "replacement": ""})
+        for corr in payload.get("corrections") or []:
+            if isinstance(corr, dict):
+                entries.append({
+                    "kind": "correction",
+                    "term": str(corr.get("wrong") or ""),
+                    "replacement": str(corr.get("right") or ""),
+                })
+
+        path = self.config.resolve(self.config.dictionary.path)
+        try:
+            update_dictionary_file(path, entries)
+        except OSError:
+            logger.exception("Écriture du dictionnaire échouée")
+            self._notify_user("Enregistrement du dictionnaire impossible (voir logs).")
+            return {"ok": False, "error": "Écriture du dictionnaire impossible."}
+
+        # Rechargement à chaud (uniquement si le dictionnaire est actif : sinon les
+        # sous-systèmes n'appliquent aucun dictionnaire — le fichier est tout de même écrit).
+        hotwords: list[str] = []
+        replacements: dict[str, str] = {}
+        if self.config.dictionary.enabled:
+            try:
+                hotwords, replacements = load_dictionary(path)
+                self.transcriber.set_dictionary(hotwords, replacements)
+                self.profiles.reload_dictionary()
+            except Exception:  # noqa: BLE001 — le fichier est écrit ; l'app reste opérationnelle
+                logger.exception("Rechargement à chaud du dictionnaire échoué")
+
+        n_hot = len(hotwords) if self.config.dictionary.enabled else \
+            sum(1 for e in entries if e["kind"] == "hotword")
+        n_corr = len(replacements) if self.config.dictionary.enabled else \
+            sum(1 for e in entries if e["kind"] == "correction" and e["replacement"].strip())
+        if self.config.dictionary.enabled:
+            self._notify_user(
+                f"Dictionnaire enregistré : {n_hot} terme(s), {n_corr} correction(s).",
+                "info", tray=False,
+            )
+        else:
+            self._notify_user(
+                "Dictionnaire enregistré (actuellement désactivé — activez "
+                "dictionary.enabled pour l'appliquer).",
+                "warn", tray=False,
+            )
+        logger.info("Dictionnaire enregistré depuis l'interface (%d entrée(s)).", len(entries))
+        return {"ok": True, "hotwords": n_hot, "corrections": n_corr}
 
     # -- interface fenêtre (V2) ------------------------------------------------
     def show_window(self) -> None:

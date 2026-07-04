@@ -62,6 +62,20 @@ class ProfileResolver:
         # Cache des dictionnaires de profil (clé = nom de profil).
         self._cache: dict[str, tuple[list[str], dict[str, str]]] = {}
 
+    def reload_dictionary(self) -> None:
+        """Recharge le dictionnaire de base après une édition (UC-19).
+
+        Relit ``dictionary.txt`` (si profils + dictionnaire actifs) et **vide le
+        cache** des dictionnaires de profil, qui dérivent tous de cette base.
+        """
+        self._base_hotwords = []
+        self._base_replacements = {}
+        if self.enabled and self._config.dictionary.enabled:
+            self._base_hotwords, self._base_replacements = load_dictionary(
+                self._config.resolve(self._config.dictionary.path)
+            )
+        self._cache.clear()
+
     def for_app(self, app_name: Optional[str]) -> Optional[ResolvedProfile]:
         """Résout le profil pour ``app_name``.
 

@@ -417,6 +417,26 @@ input[type=text] {
 }
 .saved-note { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--green-2); font-weight: 500; }
 
+/* ── Dictionnaire (UC-19) ─────────────────────────────────────────────────── */
+.dict-warn {
+  font-size: 12px; line-height: 1.5; color: var(--amber-2);
+  background: rgba(245,158,11,0.09); border: 1px solid rgba(245,158,11,0.24);
+  border-radius: 9px; padding: 9px 12px;
+}
+.dict-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.dict-list { display: flex; flex-direction: column; gap: 7px; }
+.dict-row { display: flex; align-items: center; gap: 8px; }
+.dict-row .dict-term { flex: 1; }
+.dict-row.corr .dict-wrong, .dict-row.corr .dict-right { flex: 1; min-width: 0; }
+.dict-arrow { color: var(--dim); font-size: 13px; flex: 0 0 auto; }
+.dict-del {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 7px; cursor: pointer;
+  border: 1px solid rgba(239,68,68,0.22); background: rgba(239,68,68,0.06); color: var(--red-2);
+}
+.dict-del:hover { background: rgba(239,68,68,0.15); }
+.dict-empty { font-size: 12px; color: var(--dim); margin: 4px 0 0; }
+
 /* ── Historique ───────────────────────────────────────────────────────────── */
 .hist-head { display: flex; align-items: center; justify-content: space-between; }
 .hist-title { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
