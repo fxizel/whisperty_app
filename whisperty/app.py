@@ -774,6 +774,50 @@ class WhispertyApp:
         if not error and text:
             self._maybe_summarize(text, path, "réunion")
 
+    # -- diarisation des locuteurs (UC-18) -------------------------------------
+    def speakers(self) -> dict:
+        """Locuteurs détectés en réunion diarisée, pour l'interface (US-11/12).
+
+        ``{active, speakers:[{key,label,auto,name,count}]}`` — ``active`` pilote
+        l'affichage du panneau de renommage (visible uniquement si la diarisation
+        tourne). Récupéré par le JS quand ``liveRev`` change et l'état est CONFERENCE."""
+        conf = self.conference
+        try:
+            return {"active": bool(conf.diarization_active), "speakers": conf.speakers()}
+        except Exception:  # noqa: BLE001
+            logger.exception("Lecture des locuteurs échouée")
+            return {"active": False, "speakers": []}
+
+    def rename_speaker(self, key: object = None, name: object = None) -> dict:
+        """Renomme un locuteur détecté (FR-31) et rafraîchit le flux affiché (US-12).
+
+        Le renommage est rétroactif : il s'applique au flux en direct (réémis ici depuis
+        les clés stockées), à l'export et à l'historique (rendus à l'arrêt depuis les mêmes
+        clés). Sans interrompre la capture."""
+        conf = self.conference
+        try:
+            ok = conf.rename_speaker(str(key or ""), None if name is None else str(name))
+        except Exception:  # noqa: BLE001
+            logger.exception("Renommage de locuteur échoué")
+            return {"ok": False, "error": "Renommage impossible (voir logs)."}
+        if not ok:
+            return {"ok": False, "error": "Locuteur inconnu."}
+        # Réémet le flux affiché avec les libellés courants (le fichier/historique sont
+        # rendus depuis les mêmes clés à l'arrêt ; rien à réécrire ici).
+        try:
+            lines = conf.render_lines()
+        except Exception:  # noqa: BLE001
+            lines = None
+        if lines is not None:
+            with self._live_lock:
+                self._live_lines = lines[-_LIVE_DISPLAY_MAX_LINES:]
+                self._live_stamps = [
+                    (_LINE_STAMP_RE.match(line).group(1) if _LINE_STAMP_RE.match(line) else "")
+                    for line in self._live_lines
+                ]
+                self._live_rev += 1
+        return {"ok": True}
+
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
         """Copie la dernière transcription dans le presse-papiers (menu tray)."""
@@ -1037,6 +1081,35 @@ class WhispertyApp:
                 if res != c.summary.enabled:
                     c.summary.enabled = res
                     updates["summary.enabled"] = res
+            # -- réunion / diarisation (UC-10 / UC-18) : lu au prochain start_conference() --
+            conf = c.conference
+            sd = conf.speaker_diarization
+            distinguish = conf.distinguish_speakers
+            if "distinguishSpeakers" in payload:
+                distinguish = bool(payload["distinguishSpeakers"])
+            diarization = sd.enabled
+            if "diarization" in payload:
+                diarization = bool(payload["diarization"])
+            if diarization and not distinguish:
+                distinguish = True
+            if distinguish != conf.distinguish_speakers:
+                conf.distinguish_speakers = distinguish
+                updates["conference.distinguish_speakers"] = distinguish
+            if "diarization" in payload and diarization != sd.enabled:
+                sd.enabled = diarization
+                updates["conference.speaker_diarization.enabled"] = diarization
+            if "maxSpeakers" in payload:
+                max_sp = min(20, max(2, int(payload["maxSpeakers"])))
+                if max_sp != sd.max_speakers:
+                    sd.max_speakers = max_sp
+                    updates["conference.speaker_diarization.max_speakers"] = max_sp
+            if "labelPrefix" in payload:
+                prefix = str(payload["labelPrefix"]).strip()[:40]
+                if not prefix:
+                    prefix = "Locuteur"
+                if prefix != sd.label_prefix:
+                    sd.label_prefix = prefix
+                    updates["conference.speaker_diarization.label_prefix"] = prefix
         except (TypeError, ValueError):
             logger.exception("Réglages invalides reçus de l'interface")
             return {"ok": False, "error": "Réglages invalides."}

@@ -129,6 +129,26 @@ class LiveConfig:
 
 
 @dataclass
+class SpeakerDiarizationConfig:
+    """Diarisation des locuteurs individuels en réunion (V2, UC-18, itération 3).
+
+    **Extension opt-in** de la distinction par source (``distinguish_speakers``) :
+    quand ``enabled: true``, chaque segment reçoit une étiquette de locuteur vocal
+    (``Locuteur 1``, ``Locuteur 2``, …) au lieu de la seule étiquette de source
+    (``Moi`` / ``Interlocuteurs``). 100 % locale, sans réseau ni modèle à télécharger
+    (empreinte MFCC pur NumPy + clustering en ligne, cf. :mod:`whisperty.diarization`).
+    Désactivée par défaut (CO-18). Sans effet si ``distinguish_speakers: false``
+    (mixage) : la diarisation exige la transcription séparée des sources.
+    """
+
+    enabled: bool = False
+    max_speakers: int = 6                 # borne du nb de locuteurs détectés PAR source
+    label_prefix: str = "Locuteur"        # préfixe des étiquettes auto (« Locuteur 2 »)
+    similarity_threshold: float = 0.75    # cosinus ≥ seuil ⇒ même locuteur (à ajuster)
+    min_segment: float = 1.0              # segments plus courts ⇒ non diarisés (repli source)
+
+
+@dataclass
 class ConferenceConfig:
     """Mode réunion : capture micro + sortie système simultanés (V2)."""
 
@@ -147,6 +167,10 @@ class ConferenceConfig:
     distinguish_speakers: bool = True
     mic_label: str = "Moi"
     system_label: str = "Interlocuteurs"
+    # Itération 3 (UC-18) : diarisation des locuteurs individuels (opt-in, cf. ci-dessus).
+    speaker_diarization: SpeakerDiarizationConfig = field(
+        default_factory=SpeakerDiarizationConfig
+    )
 
 
 @dataclass
@@ -256,7 +280,7 @@ class Config:
             ai=_build(AIConfig, data.get("ai")),
             profiles=_build_profiles(data.get("profiles")),
             live=_build(LiveConfig, data.get("live")),
-            conference=_build(ConferenceConfig, data.get("conference")),
+            conference=_build_conference(data.get("conference")),
             notes=_build(NotesConfig, data.get("notes")),
             summary=_build(SummaryConfig, data.get("summary")),
             gui=_build(GuiConfig, data.get("gui")),
@@ -347,6 +371,23 @@ def _as_str_list(value) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v) for v in value if v is not None and str(v).strip()]
     return [str(value)]  # scalaire isolé (ex. int) → ["123"]
+
+
+def _build_conference(raw) -> ConferenceConfig:
+    """Construit ``ConferenceConfig`` avec sa sous-section ``speaker_diarization`` (UC-18).
+
+    ``_build`` ne recurse pas dans les dataclasses imbriquées : on isole le sous-mapping
+    ``speaker_diarization``, on construit les scalaires de la réunion via ``_build``, puis
+    on remplace le champ imbriqué par sa dataclass (chargement robuste, comme les profils).
+    """
+    if not isinstance(raw, dict) or not raw:
+        return ConferenceConfig()
+    diar_raw = raw.get("speaker_diarization")
+    # On retire la clé imbriquée avant _build (sinon elle serait stockée comme dict brut).
+    scalars = {k: v for k, v in raw.items() if k != "speaker_diarization"}
+    conference = _build(ConferenceConfig, scalars)
+    conference.speaker_diarization = _build(SpeakerDiarizationConfig, diar_raw)
+    return conference
 
 
 def _build_profiles(raw) -> ProfilesConfig:

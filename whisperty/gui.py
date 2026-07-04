@@ -251,6 +251,27 @@ class GuiApi:
             logger.exception("add_note a échoué")
             return {"ok": False, "error": "Note impossible (voir logs)."}
 
+    def get_speakers(self) -> dict:
+        """Locuteurs détectés en réunion diarisée (UC-18) : {active, speakers:[…]}.
+
+        Récupéré par le JS quand ``poll().liveRev`` change et l'état est ``conference``
+        (les locuteurs apparaissent/évoluent avec les segments). ``active: false`` hors
+        diarisation → le panneau de renommage reste masqué."""
+        try:
+            return self._app.speakers()
+        except Exception:  # noqa: BLE001
+            return {"active": False, "speakers": []}
+
+    def rename_speaker(self, key: Optional[str] = None, name: Optional[str] = None) -> dict:
+        """Renomme un locuteur détecté (FR-31/US-12), sans interrompre la capture.
+
+        Le renommage est rétroactif (flux en direct, export, historique de la session)."""
+        try:
+            return self._app.rename_speaker(key, name)
+        except Exception:  # noqa: BLE001
+            logger.exception("rename_speaker a échoué")
+            return {"ok": False, "error": "Renommage impossible (voir logs)."}
+
     def toggle_record(self) -> dict:
         """Démarre/arrête selon le mode courant et l'état (délègue à WhispertyApp)."""
         from .tray import TrayState
@@ -394,6 +415,11 @@ class GuiApi:
             "iaModel": c.ai.model,
             "resume": bool(c.summary.enabled),
             "localOnly": bool(c.transcription.local_files_only),
+            # Réunion (UC-10 / UC-18) — lu au prochain start_conference().
+            "distinguishSpeakers": bool(c.conference.distinguish_speakers),
+            "diarization": bool(c.conference.speaker_diarization.enabled),
+            "maxSpeakers": int(c.conference.speaker_diarization.max_speakers),
+            "labelPrefix": str(c.conference.speaker_diarization.label_prefix or "Locuteur"),
         }
 
     def save_config(self, payload: Optional[dict]) -> dict:

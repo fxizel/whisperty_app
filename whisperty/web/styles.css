@@ -536,6 +536,36 @@ input[type=text] {
 }
 .note-row input::placeholder { color: var(--dim); }
 
+/* ── Locuteurs détectés (UC-18, diarisation) ──────────────────────────────────
+   Panneau sous la tuile de transcription, visible seulement en réunion diarisée :
+   liste les voix détectées (« Locuteur N ») avec un champ de renommage à chaud. */
+.speakers {
+  margin-top: 10px; padding: 9px 11px 10px;
+  border-radius: 9px; background: var(--panel-2);
+  border: 1px solid rgba(96,165,250,0.28); flex: 0 0 auto;
+}
+.speakers-head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  color: #93c5fd; font-size: 11.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.speakers-list { display: flex; flex-direction: column; gap: 6px; }
+.speaker-row { display: flex; align-items: center; gap: 8px; }
+.speaker-tag {
+  flex: 0 0 auto; min-width: 74px; padding: 3px 8px;
+  border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: rgba(96,165,250,0.16); color: #bfdbfe;
+  border: 1px solid rgba(96,165,250,0.3); text-align: center;
+}
+.speaker-input {
+  flex: 1 1 auto; min-width: 0; padding: 5px 9px;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text-2);
+  font-size: 12.5px; outline: none;
+}
+.speaker-input:focus { border-color: rgba(96,165,250,0.55); }
+.speaker-input::placeholder { color: var(--dim); }
+
 /* ── Toasts (retours utilisateur visibles) ────────────────────────────────────
    Relaye les notices du backend (erreur micro/modèle, fin de session, copie…) :
    sans eux, ces évènements n'existent que dans les logs et l'app paraît muette.

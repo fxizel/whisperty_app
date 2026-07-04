@@ -223,6 +223,20 @@ de celle des interlocuteurs, **afin de** savoir clairement qui a dit quoi.
 - La distinction repose sur la source du son (déterministe) et ne fait appel à aucun service externe.
 - **Priorité : Could** · **Parent : EPIC-3**
 
+### ST-3.6 — Distinguer chaque orateur (diarisation des locuteurs)
+**En tant que** personne suivant une réunion hybride, **je veux** que le compte rendu identifie
+**chaque orateur** (plusieurs personnes en salle, plusieurs participants distants) et non plus
+seulement la source, **afin de** savoir précisément qui a dit quoi.
+- Option **désactivée par défaut** (`conference.speaker_diarization.enabled`) : quand elle est
+  activée, chaque passage porte une étiquette de voix (« Locuteur 2 ») entrelacée
+  chronologiquement, quelle que soit la provenance du son.
+- Je peux **renommer** un locuteur détecté depuis la fenêtre (« Locuteur 2 » → « Marie Dupont »)
+  sans interrompre la réunion ; le nom s'applique rétroactivement au flux, à l'export et à l'historique.
+- **100 % local, sans rien à télécharger** : l'empreinte vocale est calculée sur la machine ; aucun
+  audio ni empreinte ne quitte le poste. Toute voix trop courte ou ambiguë retombe sur l'étiquette
+  de source — la réunion ne s'arrête jamais à cause de la diarisation.
+- **Priorité : Could** · **Parent : EPIC-3** · Réf. UC-18
+
 # EPIC-4 — Configuration & déploiement
 
 **Priorité : Must / Could**

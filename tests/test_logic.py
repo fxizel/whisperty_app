@@ -1244,6 +1244,183 @@ def test_conference_distinct(tmp_path: Path) -> None:
 
 
 # =============================================================================
+# 26) Diarisation des locuteurs (UC-18) — logique pure
+# =============================================================================
+def test_diarization_logic() -> None:
+    import numpy as np
+
+    from whisperty.config import SpeakerDiarizationConfig
+    from whisperty.diarization import (
+        Diarizer,
+        SpeakerRegistry,
+        cosine_similarity,
+        speaker_embedding,
+    )
+
+    v = lambda *xs: np.array(xs, dtype=np.float32)  # noqa: E731
+
+    # (a) Registre : clustering par source, numérotation GLOBALE, seuil de similarité.
+    reg = SpeakerRegistry(similarity_threshold=0.9, max_speakers=3, label_prefix="Locuteur")
+    k1 = reg.assign("mic", v(1, 0, 0))          # 1er locuteur → spk:0
+    k2 = reg.assign("mic", v(0.98, 0.2, 0))     # proche → même locuteur
+    k3 = reg.assign("mic", v(0, 1, 0))          # orthogonal → nouveau locuteur
+    assert k1 == k2 == "spk:0", (k1, k2)
+    assert k3 == "spk:1"
+    assert reg.label("spk:0") == "Locuteur 1" and reg.label("spk:1") == "Locuteur 2"
+    # Même vecteur mais AUTRE source → cluster distinct (distinction par source), numéro global.
+    k4 = reg.assign("system", v(1, 0, 0))
+    assert k4 == "spk:2", k4
+    assert {s["key"] for s in reg.speakers()} == {"spk:0", "spk:1", "spk:2"}
+
+    # (b) Renommage (FR-31) : rétroactif via le libellé ; nom vide = retour à l'auto ; clé inconnue.
+    assert reg.rename("spk:0", "Alice") is True
+    assert reg.label("spk:0") == "Alice"
+    assert [s for s in reg.speakers() if s["key"] == "spk:0"][0]["label"] == "Alice"
+    assert reg.rename("spk:0", "  ") is True and reg.label("spk:0") == "Locuteur 1"
+    assert reg.rename("spk:99", "X") is False and reg.rename("pasunecle", "X") is False
+
+    # (c) Plafond max_speakers PAR source : jamais de nouvel id au-delà, rattachement au plus proche.
+    capped = SpeakerRegistry(similarity_threshold=0.9, max_speakers=2, label_prefix="L")
+    capped.assign("mic", v(1, 0, 0))
+    capped.assign("mic", v(0, 1, 0))
+    k_cap = capped.assign("mic", v(0, 0, 1))    # 3e voix, plafond 2 atteint
+    assert k_cap in ("spk:0", "spk:1") and len(capped.speakers()) == 2, k_cap
+
+    # (d) Diarizer : repli gracieux (BR-08) quand l'empreinte est indisponible/trop courte.
+    fallback = Diarizer(
+        SpeakerDiarizationConfig(enabled=True, min_segment=1.0),
+        sample_rate=16000, embed_fn=lambda a, sr: None,
+    )
+    assert fallback.identify(np.ones(16000, np.float32), "mic", "Moi") == "Moi"   # embedding None
+    assert fallback.identify(np.ones(100, np.float32), "mic", "Moi") == "Moi"     # trop court
+    ok = Diarizer(
+        SpeakerDiarizationConfig(min_segment=0.0), sample_rate=16000,
+        embed_fn=lambda a, sr: v(1, 0),
+    )
+    assert ok.identify(np.ones(16000, np.float32), "mic", "Moi") == "spk:0"
+    assert ok.label("spk:0").startswith("Locuteur") and ok.label("Moi") == "Moi"
+
+    # (e) Empreinte MFCC réelle : deux « voix » distinctes sont moins proches qu'une même voix ;
+    #     silence / segment trop court → None (repli). 100 % local, déterministe.
+    rng = np.random.default_rng(0)
+
+    def voice(freqs, n=16000):
+        t = np.arange(n) / 16000.0
+        sig = sum(np.sin(2 * np.pi * f * t) for f in freqs)
+        sig = sig / np.max(np.abs(sig)) * 0.5
+        return (sig + 0.001 * rng.standard_normal(n)).astype(np.float32)
+
+    a1 = speaker_embedding(voice([150, 300, 450]))
+    a2 = speaker_embedding(voice([150, 300, 450]))
+    b1 = speaker_embedding(voice([230, 460, 690]))
+    assert a1 is not None and a2 is not None and b1 is not None
+    assert cosine_similarity(a1, a2) > cosine_similarity(a1, b1)
+    assert speaker_embedding(np.zeros(16000, np.float32)) is None       # silence
+    assert speaker_embedding(np.ones(100, np.float32)) is None          # trop court
+    print("[26] diarisation UC-18 : registre, numérotation globale, renommage, plafond, repli, empreinte  OK")
+
+
+# =============================================================================
+# 27) Diarisation en réunion (UC-18) — intégration ConferenceTranscriber
+# =============================================================================
+def test_conference_diarization(tmp_path: Path) -> None:
+    import queue
+    import time
+
+    import numpy as np
+
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber
+    from whisperty.diarization import Diarizer
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.export_dir = "conf_diar"
+    cfg.conference.distinguish_speakers = True
+    cfg.conference.speaker_diarization.enabled = True
+    cfg.conference.speaker_diarization.min_segment = 0.0
+    cfg.conference.speaker_diarization.similarity_threshold = 0.75
+
+    class FakeTr:
+        def transcribe(self, audio, profile=None):
+            return "x"
+
+        def transcribe_segments(self, audio, profile=None):
+            return [(0.0, 1.0, "phrase")]
+
+    # Empreinte contrôlée par le signe de l'audio : > 0 → voix A, < 0 → voix B, 0 → None (repli).
+    def fake_embed(audio, sr):
+        m = float(np.mean(audio))
+        if abs(m) < 1e-9:
+            return None
+        return np.array([1.0, 0.0], np.float32) if m > 0 else np.array([0.0, 1.0], np.float32)
+
+    def drive(ct):
+        """Draine la file de diarisation de façon déterministe (sentinelle + worker synchrone)."""
+        ct._diar_queue.put(None)
+        ct._diar_loop()
+
+    voice_a = np.full(8000, 0.4, np.float32)
+    voice_b = np.full(8000, -0.4, np.float32)
+
+    # (a) Deux voix distinctes → deux clés de locuteur, numérotation globale, libellés résolus.
+    ct = ConferenceTranscriber(cfg, FakeTr())
+    ct._distinct = True
+    ct._diar = Diarizer(cfg.conference.speaker_diarization, 16000, embed_fn=fake_embed)
+    ct._diar_queue = queue.Queue()
+    ct._t0 = time.monotonic()
+    ct._emit_distinct("mic", 8000, voice_a)       # → spk:0
+    ct._emit_distinct("system", 8000, voice_b)    # → spk:1
+    ct._emit_distinct("mic", 8000, voice_a)       # même voix A → spk:0 (cluster stable)
+    drive(ct)
+    keys = [k for _, k, _ in ct._segments]
+    assert keys == ["spk:0", "spk:1", "spk:0"], keys
+    lines = ct.render_lines()
+    assert any("Locuteur 1 : phrase" in ln for ln in lines)
+    assert any("Locuteur 2 : phrase" in ln for ln in lines)
+    assert ct.diarization_active is True
+    assert {s["key"] for s in ct.speakers()} == {"spk:0", "spk:1"}
+
+    # (b) Renommage rétroactif (FR-31) : le rendu (flux/export) reflète le nouveau nom.
+    assert ct.rename_speaker("spk:0", "Marie Dupont") is True
+    lines = ct.render_lines()
+    assert any("Marie Dupont : phrase" in ln for ln in lines)
+    assert not any("Locuteur 1 " in ln for ln in lines)     # plus d'étiquette auto pour spk:0
+    # Export final trié : le fichier reprend les libellés courants (post-renommage).
+    path = ct._open_transcript("Sys", "Mic")
+    ct._close_transcript()
+    ct._finish("Sys", path)
+    content = path.read_text(encoding="utf-8")
+    assert "Marie Dupont : phrase" in content and "Locuteur 2 : phrase" in content
+    path.unlink()
+
+    # (c) Repli gracieux (BR-08) : empreinte indisponible → étiquette de SOURCE, jamais d'omission.
+    ct2 = ConferenceTranscriber(cfg, FakeTr())
+    ct2._distinct = True
+    ct2._diar = Diarizer(cfg.conference.speaker_diarization, 16000, embed_fn=fake_embed)
+    ct2._diar_queue = queue.Queue()
+    ct2._t0 = time.monotonic()
+    ct2._emit_distinct("system", 8000, np.zeros(8000, np.float32))  # embed None → repli
+    drive(ct2)
+    assert [k for _, k, _ in ct2._segments] == ["Interlocuteurs"], ct2._segments
+    assert any("Interlocuteurs : phrase" in ln for ln in ct2.render_lines())
+
+    # (d) Diarisation NON construite si opt-out ou mode mixé (repli distinction/ mixage).
+    off = Config()
+    off.base_dir = base
+    off.conference.distinguish_speakers = True
+    off.conference.speaker_diarization.enabled = False
+    ct3 = ConferenceTranscriber(off, FakeTr())
+    ct3._distinct = True
+    assert ct3._make_diarizer() is None                     # opt-out
+    off.conference.speaker_diarization.enabled = True
+    ct3._distinct = False
+    assert ct3._make_diarizer() is None                     # mixage : pas de diarisation
+    print("[27] diarisation réunion : clés locuteur, numérotation, renommage rétroactif, export, repli  OK")
+
+
+# =============================================================================
 # 22) Résumé de fin de session (UC-17) — LLM local
 # =============================================================================
 def test_session_summary() -> None:
@@ -1612,6 +1789,8 @@ def _run_all() -> None:
     test_conference_consume(tmp)
     test_conference_degradation(tmp)
     test_conference_distinct(tmp)
+    test_diarization_logic()
+    test_conference_diarization(tmp)
     test_session_notes(tmp)
     test_session_summary()
     test_dictionary_edit(tmp)

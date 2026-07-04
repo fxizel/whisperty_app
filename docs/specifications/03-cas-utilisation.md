@@ -494,6 +494,16 @@ en une transcription continue sans étiquette de locuteur.
 > UC-18 **étend** UC-10 : il ne crée pas de nouvel état dans la machine à états (§3) et
 > s'exécute pendant `CONFERENCE`. Il ne s'applique pas au mode live seul (UC-09).
 
+> **Note d'implémentation (itération livrée)** : la diarisation intégrée n'exige **aucun
+> modèle ni téléchargement** — l'empreinte vocale est calculée localement en pur NumPy
+> (statistiques MFCC + clustering en ligne, cf. `diarization.py`). C'est la forme la plus
+> forte de CO-17 (rien à télécharger = rien ne peut fuiter) ; en contrepartie, la précision
+> est inférieure à un modèle neuronal dédié (sépare des voix nettement différentes). Le
+> parcours de **téléchargement guidé d'un modèle** (extensions ci-dessous, CO-18/CO-19)
+> décrit donc un **backend optionnel de meilleure qualité (ex. ONNX hors-ligne), à venir** ;
+> l'embedder est enfichable pour l'accueillir. Aujourd'hui, activer la diarisation ne
+> déclenche aucune bannière de téléchargement — la fonctionnalité marche hors-ligne d'emblée.
+
 **Scénario nominal (réunion hybride)**
 1. L'utilisateur active la diarisation des locuteurs (`speaker_diarization.enabled: true`) et lance une réunion (UC-10).
 2. Le micro local capture les voix **en salle** ; la sortie système capture les voix **à distance** (Teams, Meet…).

@@ -148,6 +148,16 @@
             <input type="text" id="note-input" placeholder="Ajouter une note… (Entrée pour valider)" maxlength="500">
             <button class="btn-ghost" id="note-add"><span>Noter</span></button>
           </div>
+          <!-- Locuteurs détectés (UC-18) : visible uniquement en réunion diarisée.
+               Renommage à chaud (FR-31/US-12) — reflété dans le flux, l'export et
+               l'historique de la session en cours, sans interrompre la capture. -->
+          <div class="speakers" id="speakers-panel" style="display:none;">
+            <div class="speakers-head">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.5" cy="5" r="2.2"/><path d="M2 12.6c0-2.1 1.7-3.1 3.5-3.1s3.5 1 3.5 3.1"/><circle cx="11.2" cy="5.6" r="1.7"/><path d="M10.2 9.7c1.9 0 3 1 3 2.9"/></svg>
+              <span>Locuteurs détectés</span>
+            </div>
+            <div class="speakers-list" id="speakers-list"><!-- rempli par JS --></div>
+          </div>
         </div>
 
         <div class="stats">
@@ -257,6 +267,38 @@
                 <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">À l'arrêt d'un live ou d'une réunion, résume la conversation via le LLM local ci-dessus (ajouté au transcript et à l'historique).</span>
               </span>
               <button class="switch" id="resume-switch"><span class="knob"></span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Réunion -->
+        <div class="accordion" data-acc="reunion">
+          <button class="acc-head"><span class="t"><span class="name">Réunion</span><span class="desc">Distinction des locuteurs en mode Conférence</span></span>
+            <svg class="chev" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg>
+          </button>
+          <div class="acc-body">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0 16px;">
+              <span style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:13px; color:var(--text-2); font-weight:500;">Distinction par source</span>
+                <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">Sépare le micro (<em>Moi</em>) et la sortie système (<em>Interlocuteurs</em>) au lieu de mixer les deux voix.</span>
+              </span>
+              <button class="switch on" id="conf-distinguish-switch"><span class="knob"></span></button>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 0 16px;">
+              <span style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:13px; color:var(--text-2); font-weight:500;">Diarisation des locuteurs</span>
+                <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">Identifie chaque voix (<em>Locuteur 1</em>, <em>Locuteur 2</em>…). 100&nbsp;% local, aucun modèle à télécharger.</span>
+                <span id="conf-diarization-hint" style="display:none; font-size:11px; line-height:1.45; color:var(--dim); margin-top:2px;">Nécessite la distinction par source.</span>
+              </span>
+              <button class="switch" id="conf-diarization-switch"><span class="knob"></span></button>
+            </div>
+            <div id="conf-diarization-fields" style="display:none; grid-template-columns:1fr 1fr; gap:12px; padding-bottom:8px;">
+              <label style="display:block;"><span class="field-label">Nombre max de locuteurs</span>
+                <input type="number" id="cfg-max-speakers" min="2" max="20" step="1" style="width:100%; font-size:12.5px;">
+              </label>
+              <label style="display:block;"><span class="field-label">Préfixe des étiquettes</span>
+                <input type="text" id="cfg-label-prefix" maxlength="40" style="width:100%; font-size:12.5px;" placeholder="Locuteur">
+              </label>
             </div>
           </div>
         </div>

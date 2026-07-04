@@ -14,10 +14,10 @@
 
 #define MyAppName "Whisperty"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
 #ifndef MyAppVersionInfo
-  #define MyAppVersionInfo "0.2.0.0"
+  #define MyAppVersionInfo "0.3.0.0"
 #endif
 #define MyAppPublisher "Softcom"
 #define MyAppExeName "whisperty.exe"

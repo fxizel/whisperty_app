@@ -130,6 +130,19 @@ conference:
   distinguish_speakers: true
   mic_label: "Moi"
   system_label: "Interlocuteurs"
+  # Diarisation des locuteurs INDIVIDUELS (UC-18) — extension opt-in de la distinction
+  # par source ci-dessus. enabled: true => au lieu de « Moi » / « Interlocuteurs », chaque
+  # segment porte une étiquette de voix (« Locuteur 1 », « Locuteur 2 », …), entrelacée
+  # chronologiquement. 100 % LOCAL : empreinte vocale calculée sur la machine (statistiques
+  # MFCC), aucun modèle à télécharger, aucun réseau. Distinction PAR SOURCE : plusieurs
+  # personnes au micro et plusieurs participants distants sont séparés. Sans effet si
+  # distinguish_speakers: false (mixage). Renommage des locuteurs depuis la fenêtre.
+  speaker_diarization:
+    enabled: true # opt-in (défaut : distinction par source « Moi »/« Interlocuteurs »)
+    max_speakers: 6            # borne du nombre de locuteurs détectés PAR source
+    label_prefix: "Locuteur"   # préfixe des étiquettes automatiques
+    similarity_threshold: 0.75 # cosinus ≥ seuil => même locuteur (baisser si sur-segmenté)
+    min_segment: 1.0           # segments plus courts que N s => non diarisés (repli source)
 
 notes:
   # Notes en session — modes Live continu et Conférence uniquement. Saisie dans la

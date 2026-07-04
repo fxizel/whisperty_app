@@ -22,6 +22,10 @@ const Mock = (() => {
     ia: false, iaEndpoint: "http://localhost:11434", iaModel: "qwen2.5:3b",
     resume: false,
     localOnly: true,
+    distinguishSpeakers: true,
+    diarization: false,
+    maxSpeakers: 6,
+    labelPrefix: "Locuteur",
   };
   const stats = { words: 3482, dur: 47, trans: 18 };
   let lastText = "Pense à relancer l'équipe produit sur la roadmap du quatrième trimestre, et préparer un récapitulatif des retours utilisateurs avant la réunion de lundi matin.";
@@ -68,6 +72,10 @@ const Mock = (() => {
   // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
   // liveStamps = horodatage par ligne (parallèle), comme l'API réelle (notes, UC-16).
   let liveRev = 0, liveLines = [], liveStamps = [], liveTimer = null;
+  // Locuteurs factices (UC-18) : peuplés en conférence pour démontrer le panneau
+  // de renommage. {key, auto, name}. speakerLabel = nom personnalisé ou étiquette auto.
+  let speakers = [];
+  const speakerLabel = (k) => { const s = speakers.find(x => x.key === k); return s ? (s.name || s.auto) : k; };
   const liveSamples = [
     "Bonjour à tous, merci d'être présents pour ce point d'avancement.",
     "On commence par un rapide tour des sujets prioritaires de la semaine.",
@@ -82,10 +90,18 @@ const Mock = (() => {
     return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
   function startLiveMock() {
-    liveLines = []; liveStamps = []; liveRev++;
+    liveLines = []; liveStamps = []; speakers = []; liveRev++;
+    const diar = (mode === "conference");   // en réunion, on démontre la diarisation UC-18
     let i = 0;
     liveTimer = setInterval(() => {
-      liveLines.push(liveSamples[i % liveSamples.length]);
+      let line = liveSamples[i % liveSamples.length];
+      if (diar) {
+        const idx = i % 3;                   // trois voix qui alternent
+        const key = "spk:" + idx;
+        if (!speakers.find(s => s.key === key)) speakers.push({ key, auto: "Locuteur " + (idx + 1), name: "" });
+        line = "[" + mockStamp(i * 2.2) + "] " + speakerLabel(key) + " : " + line;
+      }
+      liveLines.push(line);
       liveStamps.push(mockStamp(i * 2.2)); i++; liveRev++;
     }, 2200);
   }
@@ -112,6 +128,22 @@ const Mock = (() => {
     get_dashboard: () => ({ lastText, statsWords: stats.words, statsDur: stats.dur, statsTrans: stats.trans, combo: cfg.combo, model: cfg.model, device: cfg.device }),
     set_mode: (m) => { if (m) mode = m; return { ok: true }; },
     get_live_text: () => ({ rev: liveRev, text: liveLines.join("\n"), stamps: liveStamps.slice() }),
+    // Diarisation (UC-18) : liste des locuteurs + renommage rétroactif (aperçu autonome).
+    get_speakers: () => ({
+      active: state === "conference" && speakers.length > 0,
+      speakers: speakers.map(s => ({ key: s.key, auto: s.auto, name: s.name, label: s.name || s.auto, count: 1 })),
+    }),
+    rename_speaker: (key, name) => {
+      const s = speakers.find(x => x.key === key);
+      if (!s) return { ok: false, error: "Locuteur inconnu." };
+      const before = s.name || s.auto;
+      s.name = (name || "").trim();
+      const after = s.name || s.auto;
+      // Rétroactif : réécrit les lignes déjà affichées avec le nouveau libellé (US-12).
+      liveLines = liveLines.map(l => l.replace("] " + before + " : ", "] " + after + " : "));
+      liveRev++;
+      return { ok: true };
+    },
     // Notes en session (UC-16) : simule WhispertyApp.add_note (aperçu autonome).
     add_note: (text, stamp) => {
       text = (text || "").trim();
@@ -195,6 +227,7 @@ const ui = {
   liveRev: -1,      // dernière révision du flux live vue (live/conférence) ; -1 = à récupérer
   liveLines: [],    // lignes du flux affiché (rendu + copie + citation de note)
   liveStamps: [],   // horodatage par ligne (parallèle) — ancrage des notes-citations (FR-25)
+  speakerKeys: "",  // signature des locuteurs rendus (UC-18) — re-render seulement si elle change
   noteStamp: null,  // horodatage en attente pour la prochaine note (« Noter » sur une ligne)
   noticeRev: null,  // dernière notice vue (toasts) ; null = premier poll pas encore passé
   modelOk: true,    // false = échec de chargement du modèle → bannière de téléchargement
@@ -555,6 +588,11 @@ function setLiveTile(on) {
   const noteInput = $("#note-input");
   if (noteInput) noteInput.value = "";
   ui.noteStamp = null;
+  // Panneau des locuteurs (UC-18) : masqué à l'entrée comme à la sortie ; il ne
+  // réapparaît que si refreshSpeakers détecte une diarisation active en conférence.
+  const speakers = $("#speakers-panel");
+  if (speakers) speakers.style.display = "none";
+  ui.speakerKeys = "";
 }
 
 // Une ligne du flux est-elle une note utilisateur ? (préfixe « [Note] » en live,
@@ -591,6 +629,59 @@ async function pollLiveFeed(state, liveRev) {
   if (!ui.liveLines.length) el.textContent = "En écoute…";
   else renderLiveLines(el, ui.liveLines);
   if (atBottom) el.scrollTop = el.scrollHeight;  // suit le dernier segment (sauf défilement manuel)
+  if (ui.state === "conference") refreshSpeakers();  // locuteurs (UC-18) : suivent les segments
+}
+
+// ── Locuteurs détectés (UC-18, diarisation) ──────────────────────────────────
+// Panneau visible uniquement en réunion diarisée : liste les voix détectées avec un
+// champ de renommage à chaud (FR-31/US-12). Récupéré au fil des segments (liveRev
+// change) ; re-rendu seulement quand la liste des locuteurs change, pour ne pas voler
+// le focus d'un champ en cours d'édition.
+async function refreshSpeakers() {
+  const panel = $("#speakers-panel");
+  if (!panel) return;
+  const data = (await call("get_speakers")) || {};
+  const list = data.speakers || [];
+  if (ui.state !== "conference" || !data.active || !list.length) {
+    panel.style.display = "none";
+    ui.speakerKeys = "";
+    return;
+  }
+  panel.style.display = "block";
+  const sig = list.map(s => s.key).join("|");
+  if (sig === ui.speakerKeys) return;    // même ensemble de locuteurs : ne pas re-render (édition en cours)
+  ui.speakerKeys = sig;
+  renderSpeakers(list);
+}
+
+function renderSpeakers(list) {
+  $("#speakers-list").innerHTML = list.map(s =>
+    `<div class="speaker-row">` +
+    `<span class="speaker-tag">${escapeHtml(s.auto)}</span>` +
+    `<input class="speaker-input" type="text" maxlength="60" data-key="${escapeHtml(s.key)}" ` +
+    `value="${escapeHtml(s.name || "")}" placeholder="Renommer (ex. Marie Dupont)…">` +
+    `</div>`
+  ).join("");
+}
+
+async function saveSpeakerName(key, name) {
+  if (!key) return;
+  await call("rename_speaker", key, (name || "").trim());
+  // Le backend réémet le flux (liveRev change) → la tuile et l'export reflètent le nom.
+}
+
+function bindSpeakers() {
+  const list = $("#speakers-list");
+  if (!list) return;
+  // change = validation (blur / Entrée-blur) ; on force le blur sur Entrée.
+  list.addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.target.classList.contains("speaker-input")) {
+      e.preventDefault(); e.target.blur();
+    }
+  });
+  list.addEventListener("change", e => {
+    if (e.target.classList.contains("speaker-input")) saveSpeakerName(e.target.dataset.key, e.target.value);
+  });
 }
 
 // ── Notes en session (UC-16) ─────────────────────────────────────────────────
@@ -714,8 +805,64 @@ async function loadConfig() {
   setSwitch($("#local-switch"), c.localOnly);
   $("#local-badge").style.display = c.localOnly ? "" : "none";
 
+  // Réunion (UC-10 / UC-18)
+  ui.cfg.distinguishSpeakers = c.distinguishSpeakers !== false;
+  ui.cfg.diarization = !!c.diarization;
+  ui.cfg.maxSpeakers = c.maxSpeakers ?? 6;
+  ui.cfg.labelPrefix = c.labelPrefix || "Locuteur";
+
   // Support GPU (affiché si CUDA sélectionné)
   refreshGpuStatus();
+  applyConferenceConfigState();
+}
+
+function applyConferenceConfigState() {
+  const distinguish = !!ui.cfg.distinguishSpeakers;
+  const diarization = !!ui.cfg.diarization;
+  const distSw = $("#conf-distinguish-switch");
+  const diarSw = $("#conf-diarization-switch");
+  const fields = $("#conf-diarization-fields");
+  const hint = $("#conf-diarization-hint");
+  if (!distSw || !diarSw) return;
+
+  setSwitch(distSw, distinguish);
+  setSwitch(diarSw, diarization);
+  diarSw.disabled = !distinguish;
+  diarSw.style.opacity = distinguish ? "" : "0.45";
+  if (hint) hint.style.display = distinguish ? "none" : "block";
+  if (fields) fields.style.display = diarization && distinguish ? "grid" : "none";
+
+  const maxEl = $("#cfg-max-speakers");
+  const prefixEl = $("#cfg-label-prefix");
+  if (maxEl) maxEl.value = ui.cfg.maxSpeakers ?? 6;
+  if (prefixEl) prefixEl.value = ui.cfg.labelPrefix || "Locuteur";
+}
+
+function wireConferenceConfig() {
+  const distSw = $("#conf-distinguish-switch");
+  const diarSw = $("#conf-diarization-switch");
+  const maxEl = $("#cfg-max-speakers");
+  const prefixEl = $("#cfg-label-prefix");
+  if (!distSw || !diarSw) return;
+
+  distSw.addEventListener("click", () => {
+    ui.cfg.distinguishSpeakers = !distSw.classList.contains("on");
+    if (!ui.cfg.distinguishSpeakers) ui.cfg.diarization = false;
+    applyConferenceConfigState();
+  });
+  diarSw.addEventListener("click", () => {
+    if (diarSw.disabled) return;
+    ui.cfg.diarization = !diarSw.classList.contains("on");
+    if (ui.cfg.diarization) ui.cfg.distinguishSpeakers = true;
+    applyConferenceConfigState();
+  });
+  if (maxEl) maxEl.addEventListener("change", () => {
+    ui.cfg.maxSpeakers = Math.min(20, Math.max(2, parseInt(maxEl.value, 10) || 6));
+    maxEl.value = ui.cfg.maxSpeakers;
+  });
+  if (prefixEl) prefixEl.addEventListener("input", () => {
+    ui.cfg.labelPrefix = prefixEl.value;
+  });
 }
 
 function setSwitch(el, on) { el.classList.toggle("on", !!on); }
@@ -839,6 +986,8 @@ function bindConfig() {
   // Capture du raccourci
   $("#combo-capture").addEventListener("click", toggleCapture);
 
+  wireConferenceConfig();
+
   // Sauvegarde
   $("#save-config").addEventListener("click", saveConfig);
 
@@ -880,6 +1029,10 @@ async function saveConfig() {
     ia: ui.cfg.ia, iaEndpoint: ui.cfg.iaEndpoint, iaModel: ui.cfg.iaModel,
     resume: ui.cfg.resume,
     localOnly: ui.cfg.localOnly,
+    distinguishSpeakers: ui.cfg.distinguishSpeakers,
+    diarization: ui.cfg.diarization,
+    maxSpeakers: ui.cfg.maxSpeakers,
+    labelPrefix: ui.cfg.labelPrefix,
   };
   await call("save_config", payload);
   const note = $("#saved-note");
@@ -1213,6 +1366,7 @@ function init() {
   bindDictionary();
   bindHistory();
   bindNotes();
+  bindSpeakers();
   bindTitlebar();
   $("#toast").addEventListener("click", hideToast);
   renderStatus("idle");

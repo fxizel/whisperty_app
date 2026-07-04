@@ -4,6 +4,28 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) ; les versions suivent le
 [versionnage sémantique](https://semver.org/lang/fr/).
 
+## [Non publié]
+
+## [0.3.0] — 2026-07-04
+
+### Ajouté
+
+- **Diarisation des locuteurs en réunion (UC-18)** — en mode Conférence, une nouvelle
+  option distingue désormais **chaque orateur** (plusieurs personnes au micro, plusieurs
+  participants distants) et non plus seulement la source (`Moi` / `Interlocuteurs`) :
+  chaque segment porte une étiquette de voix (`[MM:SS] Locuteur 2 : …`), entrelacée
+  chronologiquement quelle que soit la provenance du son.
+  - **100 % local, sans rien à télécharger** — l'empreinte vocale est calculée sur la
+    machine (statistiques MFCC en pur NumPy) puis regroupée par similarité ; contrairement
+    aux modèles de diarisation neuronaux (PyTorch + modèles *gated*), **aucun modèle ni
+    réseau** n'est requis — la garantie de confidentialité la plus forte possible.
+  - **Renommage à chaud** — depuis la fenêtre, un locuteur détecté peut être renommé
+    (`Locuteur 2` → « Marie Dupont ») sans interrompre la capture ; le nom s'applique
+    **rétroactivement** au flux en direct, à l'export et à l'historique de la session.
+  - **Opt-in** (`conference.speaker_diarization.enabled`, désactivé par défaut) et sans
+    risque : toute voix trop courte, silencieuse ou ambiguë retombe sur l'étiquette de
+    source — la réunion ne s'arrête jamais à cause de la diarisation.
+
 ## [0.2.0] — 2026-07-03
 
 ### Ajouté

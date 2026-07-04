@@ -131,6 +131,52 @@ def test_configio_no_cross_section_leak(tmp_path: Path) -> None:
     print("[gui 4] configio : pas de fuite de clé entre sections  OK")
 
 
+_CONFERENCE_SAMPLE = """\
+conference:
+  distinguish_speakers: true
+  mic_label: "Moi"
+  speaker_diarization:
+    enabled: false             # opt-in UC-18
+    max_speakers: 6
+    label_prefix: "Locuteur"
+"""
+
+
+def test_configio_nested_speaker_diarization(tmp_path: Path) -> None:
+    """Clés à 3 niveaux (conference.speaker_diarization.*) : commentaires préservés."""
+    p = tmp_path / "config.yaml"
+    p.write_text(_CONFERENCE_SAMPLE, encoding="utf-8")
+
+    update_yaml_file(p, {
+        "conference.distinguish_speakers": True,
+        "conference.speaker_diarization.enabled": True,
+        "conference.speaker_diarization.max_speakers": 4,
+        "conference.speaker_diarization.label_prefix": "Voix",
+    })
+    after = p.read_text(encoding="utf-8")
+    d = yaml.safe_load(after)
+
+    assert d["conference"]["distinguish_speakers"] is True
+    sd = d["conference"]["speaker_diarization"]
+    assert sd["enabled"] is True
+    assert sd["max_speakers"] == 4
+    assert sd["label_prefix"] == "Voix"
+    assert d["conference"]["mic_label"] == "Moi"
+    enabled_line = [ln for ln in after.splitlines() if ln.strip().startswith("enabled:")][0]
+    assert "# opt-in UC-18" in enabled_line
+    print("[gui 4c] configio : clés imbriquées speaker_diarization + commentaires  OK")
+
+
+def test_configio_nested_missing_block(tmp_path: Path) -> None:
+    """Crée le sous-bloc speaker_diarization s'il est absent."""
+    p = tmp_path / "config.yaml"
+    p.write_text("conference:\n  distinguish_speakers: false\n", encoding="utf-8")
+    update_yaml_file(p, {"conference.speaker_diarization.enabled": True})
+    d = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert d["conference"]["speaker_diarization"]["enabled"] is True
+    print("[gui 4d] configio : sous-bloc speaker_diarization créé si absent  OK")
+
+
 # =============================================================================
 # 2) History.delete
 # =============================================================================
@@ -186,9 +232,14 @@ def test_gui_api_shapes(tmp_path: Path) -> None:
 
     gc = api.get_config()
     for k in ("model", "device", "langue", "mic", "mics", "vad", "silence",
-              "combo", "injection", "delai", "ia", "iaEndpoint", "iaModel", "localOnly"):
+              "combo", "injection", "delai", "ia", "iaEndpoint", "iaModel", "localOnly",
+              "resume", "distinguishSpeakers", "diarization", "maxSpeakers", "labelPrefix"):
         assert k in gc, k
     assert gc["device"] == "CPU" and gc["langue"] == "fr"
+    assert gc["distinguishSpeakers"] is True
+    assert gc["diarization"] is False
+    assert gc["maxSpeakers"] == 6
+    assert gc["labelPrefix"] == "Locuteur"
     assert gc["mics"][0]["value"] is None
 
     db = api.get_dashboard()
@@ -293,6 +344,32 @@ def test_apply_config_from_gui(tmp_path: Path) -> None:
     print("[gui 7] apply_config_from_gui : mémoire + effets à chaud + config.yaml  OK")
 
 
+def test_apply_config_conference_diarization(tmp_path: Path) -> None:
+    """Réunion / diarisation UC-18 : mémoire, YAML imbriqué, distinction forcée."""
+    p = tmp_path / "config.yaml"
+    p.write_text(_CONFERENCE_SAMPLE, encoding="utf-8")
+    app, cfg = _make_app(tmp_path)
+
+    res = app.apply_config_from_gui({
+        "distinguishSpeakers": False,
+        "diarization": True,
+        "maxSpeakers": 4,
+        "labelPrefix": "Voix",
+    })
+    assert res == {"ok": True}
+    assert cfg.conference.distinguish_speakers is True   # forcé si diarisation ON
+    assert cfg.conference.speaker_diarization.enabled is True
+    assert cfg.conference.speaker_diarization.max_speakers == 4
+    assert cfg.conference.speaker_diarization.label_prefix == "Voix"
+
+    d = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert d["conference"]["distinguish_speakers"] is True
+    assert d["conference"]["speaker_diarization"]["enabled"] is True
+    assert d["conference"]["speaker_diarization"]["max_speakers"] == 4
+    assert d["conference"]["speaker_diarization"]["label_prefix"] == "Voix"
+    print("[gui 7b] apply_config_from_gui : réunion/diarisation UC-18  OK")
+
+
 def test_apply_config_invalid_nonblocking(tmp_path: Path) -> None:
     app, cfg = _make_app(tmp_path)
     # Valeur ininterprétable pour un champ numérique => géré, jamais d'exception.
@@ -313,10 +390,13 @@ def _run_all() -> None:
         test_configio_multiline_block_scalar,
         test_configio_missing_key_and_section,
         test_configio_no_cross_section_leak,
+        test_configio_nested_speaker_diarization,
+        test_configio_nested_missing_block,
         test_history_delete,
         test_gui_api_shapes,
         test_gui_api_audio_source,
         test_apply_config_from_gui,
+        test_apply_config_conference_diarization,
         test_apply_config_invalid_nonblocking,
     ]):
         d = tmp / f"t{i}"

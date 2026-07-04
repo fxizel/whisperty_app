@@ -148,9 +148,9 @@ def test_version_module() -> None:
     from whisperty import __version__
     from whisperty.version import version_info, version_tuple
 
-    assert __version__ == "0.2.0"
-    assert version_tuple() == (0, 2, 0, 0)
-    assert version_info() == "0.2.0.0"
+    assert __version__ == "0.3.0"
+    assert version_tuple() == (0, 3, 0, 0)
+    assert version_info() == "0.3.0.0"
     print("[extra 2b] version : __version__ + version_tuple/info  OK")
 
 
@@ -161,7 +161,7 @@ def test_main_version_flag(capsys) -> None:
         m.main(["--version"])
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "whisperty 0.2.0" in out
+    assert "whisperty 0.3.0" in out
     print("[extra 2c] __main__ --version  OK")
 
 

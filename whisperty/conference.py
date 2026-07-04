@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import re
 import threading
 import time
@@ -168,6 +169,16 @@ class ConferenceTranscriber:
         self._fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
         self._device_sys: Optional[str] = None
         self._mic_label_header = ""
+        # Diarisation des locuteurs individuels (itération 3, UC-18). Construite par
+        # session dans start() (numérotation stable sur la session) ; None = repli sur
+        # la distinction par source. Le worker de diarisation (RE-14) draine _diar_queue.
+        self._diar = None
+        self._diar_queue: "queue.Queue" = queue.Queue()
+
+    @property
+    def diarization_active(self) -> bool:
+        """True si la diarisation par locuteur tourne pour la session courante (US-11/12)."""
+        return self._diar is not None
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -185,6 +196,11 @@ class ConferenceTranscriber:
         self._buffers = {"mic": _StreamBuffer(), "system": _StreamBuffer()}
         self._system_name = None
         self._system_ready = threading.Event()
+        # Relus par session (une modification de config n'exige pas de reconstruire l'objet).
+        self._distinct = bool(getattr(self.cfg, "distinguish_speakers", False))
+        self._fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
+        self._diar = self._make_diarizer()
+        self._diar_queue = queue.Queue()
         try:
             self._thread = threading.Thread(target=self._run, args=(system_spec,), daemon=True)
             self._thread.start()
@@ -201,6 +217,28 @@ class ConferenceTranscriber:
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
+
+    def _make_diarizer(self):
+        """Construit le diariseur de la session (UC-18), ou None (repli distinction source).
+
+        Actif SEULEMENT en mode distinction (la diarisation exige des sources séparées, pas
+        de mixage) ET si ``speaker_diarization.enabled``. Tout échec de construction
+        (import, config) retombe silencieusement sur la distinction par source (BR-08)."""
+        sd = getattr(self.cfg, "speaker_diarization", None)
+        if not (self._distinct and sd is not None and getattr(sd, "enabled", False)):
+            return None
+        try:
+            from .diarization import Diarizer
+
+            diarizer = Diarizer(sd, SAMPLE_RATE)
+            logger.info(
+                "Diarisation des locuteurs activée (max %s/source, seuil %.2f).",
+                getattr(sd, "max_speakers", "?"), getattr(sd, "similarity_threshold", 0.0),
+            )
+            return diarizer
+        except Exception:  # noqa: BLE001 — jamais bloquant : repli sur la distinction par source
+            logger.exception("Diarisation indisponible ; repli sur la distinction par source.")
+            return None
 
     # -- worker ----------------------------------------------------------------
     def _run(self, system_spec: Optional[Union[int, str]]) -> None:
@@ -228,10 +266,15 @@ class ConferenceTranscriber:
             self._mic_label_header = mic_label or "(micro indisponible)"
             path = self._open_transcript(device_sys, self._mic_label_header)
             self._t0 = time.monotonic()
+            if not self._distinct:
+                mode = "mixage"
+            elif self._diar is not None:
+                mode = "diarisation par locuteur"
+            else:
+                mode = "distinction par source"
             logger.info(
                 "Réunion démarrée (sources : %s ; mode : %s).",
-                ", ".join(sorted(self._active)),
-                "distinction par source" if self._distinct else "mixage",
+                ", ".join(sorted(self._active)), mode,
             )
             if self._distinct:
                 self._consume_distinct()
@@ -511,35 +554,69 @@ class ConferenceTranscriber:
         logger.info("Réunion %s", line)
         return line
 
-    # -- distinction par source (itération 2) ----------------------------------
+    # -- distinction par source (itération 2) / par locuteur (itération 3, UC-18) --
     def _consume_distinct(self) -> None:
         """Transcrit chaque source SÉPARÉMENT (pas de mixage), horodate par position
-        audio, puis entrelace chronologiquement à l'arrêt (cf. _finish)."""
-        segmenters = {
-            s: _Segmenter(
-                SAMPLE_RATE, self.cfg.vad_threshold, self.cfg.silence_duration, self.cfg.max_segment
+        audio, puis entrelace chronologiquement à l'arrêt (cf. _finish).
+
+        En diarisation (UC-18), un worker dédié (_diar_loop, RE-14) étiquette chaque
+        segment par locuteur ; il est démarré ici et joint APRÈS le dernier segment
+        (sentinelle), avant _close_transcript/_finish (→ _segments complet)."""
+        diar_thread: Optional[threading.Thread] = None
+        if self._diar is not None:
+            diar_thread = threading.Thread(
+                target=self._diar_loop, daemon=True, name="diarization"
             )
-            for s in ("mic", "system")
-        }
-        pushed = {"mic": 0, "system": 0}  # échantillons poussés par source = repère temporel
-        target = max(1, int(SAMPLE_RATE * self.cfg.block_duration))
-        stall_limit = max(2, int(round(2.0 / max(self.cfg.block_duration, 0.05))))
-        stalled = {"mic": 0, "system": 0}
-        self._aligned = False
-        self._align_attempts = 0
-        while not self._stop.is_set():
-            self._stop.wait(self.cfg.block_duration)
-            if not self._aligned:
-                self._align_sources()
-            else:
-                self._drop_stalled_sources(stalled, stall_limit)
-            self._drain_per_source(segmenters, pushed, target, final=False)
-        # Vidage final : reliquats par source + flush des segments en cours.
-        self._drain_per_source(segmenters, pushed, target, final=True)
-        for source in ("mic", "system"):
-            final = segmenters[source].flush_final()
-            if final is not None:
-                self._emit_distinct(source, pushed[source], final)
+            diar_thread.start()
+        try:
+            segmenters = {
+                s: _Segmenter(
+                    SAMPLE_RATE, self.cfg.vad_threshold, self.cfg.silence_duration,
+                    self.cfg.max_segment,
+                )
+                for s in ("mic", "system")
+            }
+            pushed = {"mic": 0, "system": 0}  # échantillons poussés par source = repère temporel
+            target = max(1, int(SAMPLE_RATE * self.cfg.block_duration))
+            stall_limit = max(2, int(round(2.0 / max(self.cfg.block_duration, 0.05))))
+            stalled = {"mic": 0, "system": 0}
+            self._aligned = False
+            self._align_attempts = 0
+            while not self._stop.is_set():
+                self._stop.wait(self.cfg.block_duration)
+                if not self._aligned:
+                    self._align_sources()
+                else:
+                    self._drop_stalled_sources(stalled, stall_limit)
+                self._drain_per_source(segmenters, pushed, target, final=False)
+            # Vidage final : reliquats par source + flush des segments en cours.
+            self._drain_per_source(segmenters, pushed, target, final=True)
+            for source in ("mic", "system"):
+                final = segmenters[source].flush_final()
+                if final is not None:
+                    self._emit_distinct(source, pushed[source], final)
+        finally:
+            # Sentinelle après le dernier segment enfilé ; join avant le retour (comme la
+            # file de transcription live) pour que _finish voie tous les segments diarisés.
+            if diar_thread is not None:
+                self._diar_queue.put(None)
+                diar_thread.join(timeout=30.0)
+                if diar_thread.is_alive():
+                    logger.warning("Worker de diarisation toujours actif à l'arrêt (backlog).")
+
+    def _diar_loop(self) -> None:
+        """Worker de diarisation (RE-14) : draine _diar_queue, étiquette par locuteur, émet.
+
+        Séparé du fil de capture ET du fil de transcription : l'empreinte vocale +
+        clustering n'y bloquent ni l'un ni l'autre. ``None`` = sentinelle d'arrêt."""
+        while True:
+            job = self._diar_queue.get()
+            if job is None:
+                break
+            source, src_label, audio, stamped = job
+            key = self._diar.identify(audio, source, src_label)
+            for abs_start, text in stamped:
+                self._store_and_write(abs_start, key, text)
 
     def _drain_per_source(self, segmenters: dict, pushed: dict, target: int, final: bool) -> None:
         """Draine chaque source indépendamment (pas d'alignement entre sources)."""
@@ -555,23 +632,72 @@ class ConferenceTranscriber:
                     self._emit_distinct(source, pushed[source], completed)
 
     def _emit_distinct(self, source: str, pushed_after: int, audio: np.ndarray) -> None:
-        """Transcrit un segment d'une source et émet ses sous-segments horodatés (absolus)."""
+        """Transcrit un segment d'une source et émet ses sous-segments horodatés (absolus).
+
+        En diarisation (UC-18), l'étiquetage du locuteur est DÉFÉRÉ au worker dédié
+        (_diar_loop, RE-14) : la transcription (lourde) reste ici, l'empreinte vocale est
+        calculée hors du fil de transcription et une même clé de locuteur est appliquée à
+        tous les sous-segments du segment audio. Sinon (distinction par source, itér. 2),
+        émission immédiate avec l'étiquette de source (« Moi » / « Interlocuteurs »)."""
         # Position de début du segment dans la réunion (échantillons poussés - longueur).
         chunk_start = max(0, pushed_after - audio.shape[0]) / SAMPLE_RATE
-        label = self.cfg.mic_label if source == "mic" else self.cfg.system_label
+        src_label = self.cfg.mic_label if source == "mic" else self.cfg.system_label
         try:
             subs = self.transcriber.transcribe_segments(audio)
         except Exception:  # noqa: BLE001
             logger.exception("Transcription d'un segment (%s) échouée", source)
             return
-        for start, _end, text in subs:
-            text = (text or "").strip()
-            if not text:
-                continue
-            abs_start = chunk_start + max(0.0, float(start))
-            with self._note_lock:
-                self._segments.append((abs_start, label, text))
-            self._write_line(format_segment_line(abs_start, text, speaker=label), text)
+        stamped = [
+            (chunk_start + max(0.0, float(start)), (text or "").strip())
+            for start, _end, text in subs
+        ]
+        stamped = [(abs_start, text) for abs_start, text in stamped if text]
+        if not stamped:
+            return
+        if self._diar is not None:
+            self._diar_queue.put((source, src_label, audio, stamped))
+        else:
+            for abs_start, text in stamped:
+                self._store_and_write(abs_start, src_label, text)
+
+    def _store_and_write(self, abs_start: float, key: str, text: str) -> None:
+        """Mémorise un segment (clé de locuteur = ``spk:N`` en diarisation, sinon étiquette
+        de source) et l'écrit au fil de l'eau avec le libellé courant."""
+        with self._note_lock:
+            self._segments.append((abs_start, key, text))
+        self._write_line(
+            format_segment_line(abs_start, text, speaker=self._label_for(key)), text
+        )
+
+    def _label_for(self, key: Optional[str]) -> Optional[str]:
+        """Résout une clé de segment en libellé affichable (applique le renommage).
+
+        ``spk:N`` → libellé du locuteur (diarisation) ; toute autre clé (étiquette de
+        source, « Note », ou ``None`` en mode mixé) est renvoyée telle quelle."""
+        if self._diar is not None and isinstance(key, str) and key.startswith("spk:"):
+            return self._diar.label(key)
+        return key
+
+    # -- diarisation : liste + renommage (UC-18, FR-31 / US-11 / US-12) ----------
+    def speakers(self) -> list[dict]:
+        """Locuteurs détectés pour l'interface ([] hors diarisation)."""
+        return self._diar.speakers() if self._diar is not None else []
+
+    def rename_speaker(self, key: str, name: Optional[str]) -> bool:
+        """Renomme un locuteur détecté (FR-31) ; ``False`` hors diarisation / clé inconnue."""
+        return self._diar.rename(key, name) if self._diar is not None else False
+
+    def render_lines(self) -> list[str]:
+        """Lignes du transcript rendues avec les libellés COURANTS (post-renommage).
+
+        Rafraîchit le flux affiché après un renommage (US-12) : les libellés sont résolus
+        à la demande depuis les clés stockées, dans l'ordre chronologique."""
+        with self._note_lock:
+            ordered = sorted(self._segments, key=lambda record: record[0])
+        return [
+            format_segment_line(start, text, speaker=self._label_for(key))
+            for start, key, text in ordered
+        ]
 
     # -- transcript ------------------------------------------------------------
     def _open_transcript(self, device_sys: Optional[str], mic_label: str) -> Optional[Path]:
@@ -627,8 +753,10 @@ class ConferenceTranscriber:
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(_transcript_header(self._device_sys, self._mic_label_header, self._fmt))
-                for start, label, text in ordered:
-                    fh.write(format_segment_line(start, text, speaker=label) + "\n")
+                for start, key, text in ordered:
+                    fh.write(
+                        format_segment_line(start, text, speaker=self._label_for(key)) + "\n"
+                    )
                 if notes:
                     fh.write(self._notes_recap(notes))
             os.replace(tmp, path)  # atomique (NTFS) : l'original n'est remplacé qu'en cas de succès
@@ -652,16 +780,18 @@ class ConferenceTranscriber:
         # vrai entrelacement des deux sources — et des notes — en mode distinction).
         ordered = sorted(segments, key=lambda record: record[0])
         if self._distinct:
+            # Clé de segment → libellé courant (locuteur diarisé renommable, source, ou Note).
             body = "\n".join(
-                format_segment_line(start, text, speaker=label) for start, label, text in ordered
+                format_segment_line(start, text, speaker=self._label_for(key))
+                for start, key, text in ordered
             )
             # Le fichier final reflète l'ordre chronologique (notes comprises).
             self._rewrite_sorted(path, ordered, notes)
         else:
             # Mode mixé : texte nu, mais les notes gardent leur marqueur (US-10).
             body = "\n".join(
-                (f"[Note] {text}" if label == "Note" else text)
-                for _start, label, text in ordered
+                (f"[Note] {text}" if key == "Note" else text)
+                for _start, key, text in ordered
             )
         result = {
             "text": body.strip(),

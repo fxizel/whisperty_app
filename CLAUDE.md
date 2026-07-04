@@ -54,7 +54,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
 | `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
-| `conference.py` | Mode réunion : micro + sortie système simultanés, mixés (itération 1) | fait (V2) |
+| `conference.py` | Mode réunion : micro + sortie système simultanés (mixage itér. 1 / distinction source itér. 2 / diarisation locuteur itér. 3, UC-18) | fait (V2) |
+| `diarization.py` | Diarisation des locuteurs (UC-18) : empreinte MFCC **pur NumPy** + clustering en ligne, 100 % local, zéro modèle/réseau | fait (V2) |
 | `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
 | `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
 | `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
@@ -193,8 +194,31 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   par position audio (échantillons poussés), puis les segments sont **entrelacés chronologiquement**
   (tri à l'arrêt + réécriture triée du transcript) : `[MM:SS] Moi : …` / `[MM:SS] Interlocuteurs : …`.
   Distinction PAR SOURCE uniquement (micro = `mic_label`, sortie = `system_label`) — déterministe,
-  100 % local. La diarisation des interlocuteurs individuels (pyannote = PyTorch + modèles *gated* HF)
-  est **écartée** (tension zéro-réseau) ; à n'envisager qu'en option hors-ligne désactivée par défaut.
+  100 % local.
+- **Réunion — diarisation par locuteur (V2, itération 3, UC-18, `diarization.py`)** :
+  `conference.speaker_diarization.enabled: true` (**opt-in**, défaut `false`) **étend** la distinction
+  par source — au lieu de `Moi`/`Interlocuteurs`, chaque segment porte une étiquette de **voix**
+  (`Locuteur 1`, `Locuteur 2`, …). ⚠️ **Doctrine zéro-réseau, zéro dépendance** : la diarisation intégrée
+  est une **empreinte MFCC calculée en pur NumPy** (statistiques MFCC par segment, L2-normalisées) +
+  **clustering en ligne** (similarité cosinus) — PAS `pyannote` (PyTorch + modèles *gated* HF, en tension
+  avec la contrainte cardinale). **Rien à télécharger** = garantie zéro-fuite maximale (CO-17) ; c'est un
+  compromis précision/simplicité assumé (sépare des voix nettement différentes), l'embedder restant
+  **enfichable** (`Diarizer(embed_fn=…)`) pour un futur backend ONNX hors-ligne. Exige le mode distinction
+  (pas de mixage) ; sinon `_make_diarizer()` renvoie `None` (repli). `SpeakerRegistry` : clustering **par
+  source** (plafond `max_speakers` par source, FR-32) mais **numérotation GLOBALE** (ordre de première
+  apparition, l'étiquette ne révèle que la voix, pas la source). ⚠️ **Worker dédié (RE-14)** : la
+  transcription reste dans le fil `_consume_distinct` ; l'empreinte+clustering tournent dans `_diar_loop`
+  (thread séparé drainant `_diar_queue`), joint par **sentinelle `None`** APRÈS le dernier segment et AVANT
+  `_close_transcript`/`_finish` (comme la file live) → `_segments` complet au tri final. ⚠️ **Stockage par
+  CLÉ, pas par libellé** : `_segments` retient `(start, key, text)` où `key` = `spk:N` (diarisé) / étiquette
+  de source (repli) / `Note` ; `_label_for(key)` résout le libellé **au rendu** (flux, export trié,
+  historique) → le **renommage est rétroactif** (FR-31 : `rename_speaker` met à jour le registre, `app`
+  réémet le flux via `render_lines()`, l'export/historique se rendent depuis les mêmes clés à l'arrêt).
+  **Repli gracieux (BR-08/RE-13)** : segment trop court/silencieux/erreur → étiquette de source, jamais
+  d'omission ni d'arrêt. `SpeakerRegistry` est un **verrou feuille** (`assign` depuis `_diar_loop`,
+  `rename`/`speakers` depuis le pont GUI). Ancienne note : la diarisation par modèle neuronal (pyannote)
+  reste **écartée** ; l'empreinte NumPy la remplace comme backend par défaut, une option ONNX hors-ligne
+  restant envisageable (désactivée par défaut).
 - **Interface fenêtre (V2, `gui.py` + `web/`)** : la maquette HTML est rendue par **Edge WebView2**
   via `pywebview` (préinstallé sur Win10/11). `pywebview` est une **dépendance optionnelle** : absente
   (ou WebView2 indisponible), l'app retombe sur le **mode tray seul** historique (`gui.enabled: false`
