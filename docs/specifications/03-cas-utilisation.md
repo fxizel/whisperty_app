@@ -35,13 +35,13 @@ graph LR
       UC08[UC-08 Consulter / copier l'historique]
       UC09[UC-09 Transcrire une sortie en direct]
       UC10[UC-10 Transcrire une réunion]
-      UC18[UC-18 Distinguer les locuteurs individuels]
       UC12[UC-12 Configurer l'application]
       UC13[UC-13 Packager / démarrage auto]
       UC14[UC-14 Obtenir le modèle initial]
       UC15[UC-15 Activer l'accélération GPU]
       UC16[UC-16 Prendre des notes en session]
       UC17[UC-17 Résumer une session]
+      UC18[UC-18 Distinguer les locuteurs individuels]
       UC19[UC-19 Gérer le dictionnaire]
     end
 
@@ -94,20 +94,20 @@ journalisé), jamais mis en file.
 | UC-02 | Déclencher / arrêter la dictée | Utilisateur | M | P-01, P-04 |
 | UC-03 | Arrêt automatique (silence / durée max) | Système | M | P-04 |
 | UC-04 | Corriger via le dictionnaire personnalisé | Utilisateur | S | P-01, P-02 |
-| UC-19 | Gérer le dictionnaire personnalisé (ajouter / modifier / supprimer) | Utilisateur | S | P-01, P-02 |
 | UC-05 | Adapter le contexte par profil applicatif | Utilisateur | C | P-01 |
 | UC-06 | Raffiner le texte par IA locale | Utilisateur | C | P-01 |
 | UC-07 | Importer et transcrire un fichier audio | Utilisateur | S | P-05 |
 | UC-08 | Consulter / copier l'historique | Utilisateur | S | P-02, P-05 |
 | UC-09 | Transcrire une sortie audio en direct (live) | Utilisateur | S | P-05 |
 | UC-10 | Transcrire une réunion (micro + sortie) | Utilisateur | S | P-02, P-05 |
-| UC-18 | Distinguer les locuteurs individuels en réunion | Utilisateur | C | P-02, P-05 |
 | UC-12 | Configurer l'application | Utilisateur / Admin | M | P-06 |
 | UC-13 | Packager / activer le démarrage automatique | Administrateur | C | P-06 |
 | UC-14 | Obtenir le modèle initial (1er lancement) | Utilisateur / Admin | M | P-06 |
 | UC-15 | Activer l'accélération GPU NVIDIA | Administrateur | C | P-06 |
 | UC-16 | Prendre des notes pendant une session (live / réunion) | Utilisateur | C | P-02, P-05 |
 | UC-17 | Résumer une session (live / réunion) par IA locale | Utilisateur / Système | C | P-02, P-05 |
+| UC-18 | Distinguer les locuteurs individuels en réunion | Utilisateur | C | P-02, P-05 |
+| UC-19 | Gérer le dictionnaire personnalisé (ajouter / modifier / supprimer) | Utilisateur | S | P-01, P-02 |
 
 > Le persona **P-03 (RSSI/DPO)** n'apparaît pas en colonne « Personas » : il agit comme
 > **acteur-contrainte** (validation du zéro-réseau, `CO-01…03`) plutôt qu'en utilisateur direct.
@@ -211,41 +211,6 @@ journalisé), jamais mis en file.
 (assistée par la fenêtre, ou par édition directe du fichier).
 **Préconditions** : `dictionary.enabled: true`.
 **Exigences liées** : FR-07, US-04, SU-02.
-
----
-
-### UC-19 — Gérer le dictionnaire personnalisé
-
-| Champ | Valeur |
-|-------|--------|
-| **Acteur principal** | Utilisateur |
-| **Objectif** | Ajouter, modifier et supprimer les entrées du dictionnaire (termes favorisés et corrections) sans éditer le fichier à la main, et voir la prise en compte sans redémarrer. |
-| **Déclencheur** | Écran « Dictionnaire » de la fenêtre ; **ou** (mode tray seul) « Ouvrir le dictionnaire » qui ouvre `dictionary.txt` dans l'éditeur par défaut. |
-| **Préconditions** | App lancée. L'édition assistée requiert la fenêtre ouverte (WebView2, US-09) ; l'édition du fichier fonctionne **toujours** (repli mode tray seul, CO-08). L'**effet** à la transcription requiert `dictionary.enabled: true` (UC-04), mais l'édition reste possible même désactivé. |
-| **Garanties (succès)** | Les entrées sont écrites dans `dictionary.txt` en **préservant commentaires et ordre** ; le dictionnaire est **rechargé à chaud** (prochaine dictée), sans redémarrage ni aucune sortie réseau. |
-| **Garanties minimales** | En cas d'échec d'écriture (droits, fichier verrouillé), l'ancien contenu est **préservé**, une erreur est notifiée, aucune entrée n'est perdue. |
-
-> UC-19 n'introduit **aucun état** dans la machine à états (§3) : l'édition se fait hors dictée ;
-> une édition pendant un mode actif ne prend effet qu'au prochain chargement du dictionnaire.
-
-**Scénario nominal (édition assistée par la fenêtre)**
-1. L'utilisateur ouvre l'écran « Dictionnaire » ; la fenêtre liste les entrées existantes, séparées en **termes favorisés** (hotwords) et **corrections** (`mauvais => correct`), lues depuis `dictionary.txt`.
-2. Il **ajoute** un terme (ex. `faster-whisper`) ou une correction (ex. `whispeurtie => Whisperty`), **modifie** ou **supprime** une entrée existante.
-3. À l'enregistrement, le système réécrit `dictionary.txt` **ligne par ligne** — préservation des commentaires `#` et de l'ordre (même doctrine que `configio.py` pour `config.yaml`, sans `ruamel`) ; les lignes vides/blanches sont ignorées et les doublons dédupliqués.
-4. Le dictionnaire est **rechargé** (reconstruction de l'index hotwords/corrections, comme lors d'un `apply_config`) : la prochaine dictée en bénéficie **sans relance**.
-5. Une notification confirme (ex. « N termes, M corrections »).
-
-**Variantes**
-- *Édition directe du fichier (repli / mode tray seul)* : « Ouvrir le dictionnaire » ouvre `dictionary.txt` dans l'éditeur système (analogue à UC-12 pour `config.yaml`) ; la prise en compte se fait à la **relance**.
-
-**Extensions / exceptions**
-- *Entrée vide ou invalide* : ignorée silencieusement (cohérent avec `load_dictionary`), sans erreur.
-- *Nature de l'entrée* : déterminée par la présence de `=>` — sans `=>` = **hotword** ; avec `=>` = **correction** (indexée en minuscules, mot entier, insensible à la casse).
-- *Fichier absent* : il est créé à l'enregistrement de la première entrée.
-- *2a. Échec d'écriture* (droits insuffisants, fichier verrouillé) : le contenu existant reste **inchangé**, l'erreur est notifiée ; l'édition n'affecte jamais une dictée en cours.
-
-**Règles** : BR-03 (ordre de post-traitement inchangé), CO-01 (édition 100 % locale), CO-08 (`dictionary.txt` éditable à côté de l'exe, non embarqué).
-**Exigences liées** : FR-33, FR-07, FR-17, US-05, SU-02, CO-01, CO-08.
 
 ---
 
@@ -382,53 +347,6 @@ en une transcription continue sans étiquette de locuteur.
 
 ---
 
-### UC-18 — Distinguer les locuteurs individuels en réunion
-
-| Champ | Valeur |
-|-------|--------|
-| **Acteur principal** | Utilisateur |
-| **Acteurs secondaires** | Moteur Whisper, module de diarisation locale |
-| **Objectif** | Identifier **chaque orateur** dans le compte rendu de réunion — qu'il parle au micro local (plusieurs personnes en salle) ou via la sortie système (plusieurs participants distants) — et non plus seulement la source audio (`Moi` / `Interlocuteurs`). |
-| **Déclencheur** | Activation de `conference.speaker_diarization.enabled: true` (ou équivalent UI) avant ou pendant une session UC-10. |
-| **Préconditions** | UC-10 actif ou sur le point de démarrer ; modèle de diarisation **téléchargé et en cache local** (opt-in, analogue UC-14) ; **consentement** des participants (BR-05). |
-| **Garanties (succès)** | Le transcript exporté et le flux en direct affichent des lignes horodatées du type `[MM:SS] Locuteur N : …` (ou libellé personnalisé), entrelacées chronologiquement quelle que soit la provenance du son. |
-| **Garanties minimales** | Si la diarisation échoue ou est indisponible, la session se poursuit avec la distinction par source (UC-10, itération 2) ; aucune perte d'audio ni d'arrêt de capture. |
-
-> UC-18 **étend** UC-10 : il ne crée pas de nouvel état dans la machine à états (§3) et
-> s'exécute pendant `CONFERENCE`. Il ne s'applique pas au mode live seul (UC-09).
-
-**Scénario nominal (réunion hybride)**
-1. L'utilisateur active la diarisation des locuteurs (`speaker_diarization.enabled: true`) et lance une réunion (UC-10).
-2. Le micro local capture les voix **en salle** ; la sortie système capture les voix **à distance** (Teams, Meet…).
-3. Chaque source est segmentée et transcrite comme en UC-10 ; en parallèle, un **worker dédié** applique la diarisation sur les segments de chaque source (empreintes vocales locales, sans réseau).
-4. Les segments sont étiquetés par locuteur (`Locuteur 1`, `Locuteur 2`, … — numérotation stable sur la session) et **fusionnés chronologiquement** avec les segments des deux sources.
-5. (Si fenêtre ouverte) le flux en direct affiche chaque ligne avec le libellé du locuteur (US-09, US-11).
-6. À l'arrêt, l'export et l'historique reprennent le transcript entrelacé avec les étiquettes de locuteur.
-
-**Variantes**
-- *Plusieurs personnes au micro* : deux collègues en salle partagent le même micro → la diarisation les distingue (`Locuteur 1` / `Locuteur 2` sur la branche micro).
-- *Plusieurs participants distants* : trois intervenants à l'écran → la diarisation les distingue sur la branche sortie système (`Locuteur 3` / `Locuteur 4` / `Locuteur 5`).
-- *Mélange présentiel + distanciel* : les locuteurs micro et distants apparaissent dans **un seul fil chronologique** ; l'étiquette ne révèle pas la source technique, seulement l'identité vocale.
-- *Renommage des locuteurs* : depuis la fenêtre, l'utilisateur remplace `Locuteur 2` par « Marie Dupont » ; le renommage s'applique rétroactivement au transcript de la session (flux, export, historique).
-- *Nombre maximal de locuteurs* : `speaker_diarization.max_speakers` borne la détection (défaut documenté) pour limiter les faux positifs en salle bruyante.
-
-**Extensions / exceptions**
-- *Modèle de diarisation absent* : bannière sur le tableau de bord ou l'écran Configuration proposant un **téléchargement en un clic** (poids annoncé, progression suivie — même doctrine que UC-14 / `modeldl.py`) ; refus → repli sur distinction par source (UC-10).
-- *Diarisation indisponible en exe figé sans modèle embarqué* : repli gracieux sur UC-10, message explicite (analogue UC-14).
-- *Locuteur non distingué* (voix trop proches, chevauchement) : le segment est attribué au locuteur le plus probable ou regroupé sous un libellé générique (`Locuteur ?`), sans bloquer la transcription.
-- *Échec du worker de diarisation* : la capture et la transcription Whisper continuent ; les segments déjà diarisés sont conservés, les suivants retombent sur l'étiquette de source (`Moi` / `Interlocuteurs`).
-- *Fenêtre fermée* : diarisation, export et archivage **inchangés** (affichage en direct = confort).
-
-**Hors périmètre (Won't, cette itération)**
-- Identification nominative automatique (reconnaissance du nom prononcé ou annuaire) — seul le renommage manuel est prévu.
-- Diarisation en mode live seul (UC-09) — une seule source, hors périmètre conférence.
-- Envoi d'empreintes vocales ou d'audio vers un service distant — interdit (CO-01, CO-17).
-
-**Règles** : BR-05 (consentement), BR-06 (pas d'injection), BR-08 (continuité de session en cas d'échec diarisation).
-**Exigences liées** : FR-29…FR-32, US-11, US-12, RE-13, RE-14, PE-07, CO-17, CO-18, CO-19.
-
----
-
 ### UC-12 — Configurer l'application
 
 | Champ | Valeur |
@@ -558,3 +476,85 @@ en une transcription continue sans étiquette de locuteur.
 
 **Règles** : BR-06 (le résumé n'est jamais injecté).
 **Exigences liées** : FR-28, RE-12, CO-01, CO-03.
+
+---
+
+### UC-18 — Distinguer les locuteurs individuels en réunion
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur |
+| **Acteurs secondaires** | Moteur Whisper, module de diarisation locale |
+| **Objectif** | Identifier **chaque orateur** dans le compte rendu de réunion — qu'il parle au micro local (plusieurs personnes en salle) ou via la sortie système (plusieurs participants distants) — et non plus seulement la source audio (`Moi` / `Interlocuteurs`). |
+| **Déclencheur** | Activation de `conference.speaker_diarization.enabled: true` (ou équivalent UI) avant ou pendant une session UC-10. |
+| **Préconditions** | UC-10 actif ou sur le point de démarrer ; modèle de diarisation **téléchargé et en cache local** (opt-in, analogue UC-14) ; **consentement** des participants (BR-05). |
+| **Garanties (succès)** | Le transcript exporté et le flux en direct affichent des lignes horodatées du type `[MM:SS] Locuteur N : …` (ou libellé personnalisé), entrelacées chronologiquement quelle que soit la provenance du son. |
+| **Garanties minimales** | Si la diarisation échoue ou est indisponible, la session se poursuit avec la distinction par source (UC-10, itération 2) ; aucune perte d'audio ni d'arrêt de capture. |
+
+> UC-18 **étend** UC-10 : il ne crée pas de nouvel état dans la machine à états (§3) et
+> s'exécute pendant `CONFERENCE`. Il ne s'applique pas au mode live seul (UC-09).
+
+**Scénario nominal (réunion hybride)**
+1. L'utilisateur active la diarisation des locuteurs (`speaker_diarization.enabled: true`) et lance une réunion (UC-10).
+2. Le micro local capture les voix **en salle** ; la sortie système capture les voix **à distance** (Teams, Meet…).
+3. Chaque source est segmentée et transcrite comme en UC-10 ; en parallèle, un **worker dédié** applique la diarisation sur les segments de chaque source (empreintes vocales locales, sans réseau).
+4. Les segments sont étiquetés par locuteur (`Locuteur 1`, `Locuteur 2`, … — numérotation stable sur la session) et **fusionnés chronologiquement** avec les segments des deux sources.
+5. (Si fenêtre ouverte) le flux en direct affiche chaque ligne avec le libellé du locuteur (US-09, US-11).
+6. À l'arrêt, l'export et l'historique reprennent le transcript entrelacé avec les étiquettes de locuteur.
+
+**Variantes**
+- *Plusieurs personnes au micro* : deux collègues en salle partagent le même micro → la diarisation les distingue (`Locuteur 1` / `Locuteur 2` sur la branche micro).
+- *Plusieurs participants distants* : trois intervenants à l'écran → la diarisation les distingue sur la branche sortie système (`Locuteur 3` / `Locuteur 4` / `Locuteur 5`).
+- *Mélange présentiel + distanciel* : les locuteurs micro et distants apparaissent dans **un seul fil chronologique** ; l'étiquette ne révèle pas la source technique, seulement l'identité vocale.
+- *Renommage des locuteurs* : depuis la fenêtre, l'utilisateur remplace `Locuteur 2` par « Marie Dupont » ; le renommage s'applique rétroactivement au transcript de la session (flux, export, historique).
+- *Nombre maximal de locuteurs* : `speaker_diarization.max_speakers` borne la détection (défaut documenté) pour limiter les faux positifs en salle bruyante.
+
+**Extensions / exceptions**
+- *Modèle de diarisation absent* : bannière sur le tableau de bord ou l'écran Configuration proposant un **téléchargement en un clic** (poids annoncé, progression suivie — même doctrine que UC-14 / `modeldl.py`) ; refus → repli sur distinction par source (UC-10).
+- *Diarisation indisponible en exe figé sans modèle embarqué* : repli gracieux sur UC-10, message explicite (analogue UC-14).
+- *Locuteur non distingué* (voix trop proches, chevauchement) : le segment est attribué au locuteur le plus probable ou regroupé sous un libellé générique (`Locuteur ?`), sans bloquer la transcription.
+- *Échec du worker de diarisation* : la capture et la transcription Whisper continuent ; les segments déjà diarisés sont conservés, les suivants retombent sur l'étiquette de source (`Moi` / `Interlocuteurs`).
+- *Fenêtre fermée* : diarisation, export et archivage **inchangés** (affichage en direct = confort).
+
+**Hors périmètre (Won't, cette itération)**
+- Identification nominative automatique (reconnaissance du nom prononcé ou annuaire) — seul le renommage manuel est prévu.
+- Diarisation en mode live seul (UC-09) — une seule source, hors périmètre conférence.
+- Envoi d'empreintes vocales ou d'audio vers un service distant — interdit (CO-01, CO-17).
+
+**Règles** : BR-05 (consentement), BR-06 (pas d'injection), BR-08 (continuité de session en cas d'échec diarisation).
+**Exigences liées** : FR-29…FR-32, US-11, US-12, RE-13, RE-14, PE-07, CO-17, CO-18, CO-19.
+
+---
+
+### UC-19 — Gérer le dictionnaire personnalisé
+
+| Champ | Valeur |
+|-------|--------|
+| **Acteur principal** | Utilisateur |
+| **Objectif** | Ajouter, modifier et supprimer les entrées du dictionnaire (termes favorisés et corrections) sans éditer le fichier à la main, et voir la prise en compte sans redémarrer. |
+| **Déclencheur** | Écran « Dictionnaire » de la fenêtre ; **ou** (mode tray seul) « Ouvrir le dictionnaire » qui ouvre `dictionary.txt` dans l'éditeur par défaut. |
+| **Préconditions** | App lancée. L'édition assistée requiert la fenêtre ouverte (WebView2, US-09) ; l'édition du fichier fonctionne **toujours** (repli mode tray seul, CO-08). L'**effet** à la transcription requiert `dictionary.enabled: true` (UC-04), mais l'édition reste possible même désactivé. |
+| **Garanties (succès)** | Les entrées sont écrites dans `dictionary.txt` en **préservant commentaires et ordre** ; le dictionnaire est **rechargé à chaud** (prochaine dictée), sans redémarrage ni aucune sortie réseau. |
+| **Garanties minimales** | En cas d'échec d'écriture (droits, fichier verrouillé), l'ancien contenu est **préservé**, une erreur est notifiée, aucune entrée n'est perdue. |
+
+> UC-19 n'introduit **aucun état** dans la machine à états (§3) : l'édition se fait hors dictée ;
+> une édition pendant un mode actif ne prend effet qu'au prochain chargement du dictionnaire.
+
+**Scénario nominal (édition assistée par la fenêtre)**
+1. L'utilisateur ouvre l'écran « Dictionnaire » ; la fenêtre liste les entrées existantes, séparées en **termes favorisés** (hotwords) et **corrections** (`mauvais => correct`), lues depuis `dictionary.txt`.
+2. Il **ajoute** un terme (ex. `faster-whisper`) ou une correction (ex. `whispeurtie => Whisperty`), **modifie** ou **supprime** une entrée existante.
+3. À l'enregistrement, le système réécrit `dictionary.txt` **ligne par ligne** — préservation des commentaires `#` et de l'ordre (même doctrine que `configio.py` pour `config.yaml`, sans `ruamel`) ; les lignes vides/blanches sont ignorées et les doublons dédupliqués.
+4. Le dictionnaire est **rechargé** (reconstruction de l'index hotwords/corrections, comme lors d'un `apply_config`) : la prochaine dictée en bénéficie **sans relance**.
+5. Une notification confirme (ex. « N termes, M corrections »).
+
+**Variantes**
+- *Édition directe du fichier (repli / mode tray seul)* : « Ouvrir le dictionnaire » ouvre `dictionary.txt` dans l'éditeur système (analogue à UC-12 pour `config.yaml`) ; la prise en compte se fait à la **relance**.
+
+**Extensions / exceptions**
+- *Entrée vide ou invalide* : ignorée silencieusement (cohérent avec `load_dictionary`), sans erreur.
+- *Nature de l'entrée* : déterminée par la présence de `=>` — sans `=>` = **hotword** ; avec `=>` = **correction** (indexée en minuscules, mot entier, insensible à la casse).
+- *Fichier absent* : il est créé à l'enregistrement de la première entrée.
+- *2a. Échec d'écriture* (droits insuffisants, fichier verrouillé) : le contenu existant reste **inchangé**, l'erreur est notifiée ; l'édition n'affecte jamais une dictée en cours.
+
+**Règles** : BR-03 (ordre de post-traitement inchangé), CO-01 (édition 100 % locale), CO-08 (`dictionary.txt` éditable à côté de l'exe, non embarqué).
+**Exigences liées** : FR-33, FR-07, FR-17, US-05, SU-02, CO-01, CO-08.
