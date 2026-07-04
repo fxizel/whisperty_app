@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from .modeldl import model_size_name
 from .version import __version__
 
 if TYPE_CHECKING:
@@ -86,6 +87,9 @@ class GuiApi:
         # le choix du sous-menu tray — n'est pas persisté dans config.yaml.
         self._source = None
         self._maximized = False
+        # Première réduction dans le tray déjà signalée ? (notification unique par
+        # session : « l'app reste active » — sinon l'utilisateur croit l'avoir fermée.)
+        self._hide_notified = False
 
     # -- contrôles fenêtre -----------------------------------------------------
     def win_minimize(self) -> dict:
@@ -102,7 +106,29 @@ class GuiApi:
 
     def win_close(self) -> dict:
         # Fermeture = masquer dans le tray (l'app continue d'écouter le raccourci).
-        return self._safe(lambda: self._window.hide())
+        def hide():
+            self._window.hide()
+            self.notify_hidden_once()
+        return self._safe(hide)
+
+    def notify_hidden_once(self) -> None:
+        """Signale (une seule fois par session) que la croix ne quitte pas l'app.
+
+        Sans ce repère, l'utilisateur croit avoir fermé Whisperty et s'étonne que le
+        raccourci continue de dicter (ou relance l'exe → cf. instance unique).
+        """
+        if self._hide_notified:
+            return
+        self._hide_notified = True
+        try:
+            self._app._notify_user(
+                "Whisperty reste actif en arrière-plan — le raccourci de dictée "
+                "fonctionne toujours. Rouvrez ou quittez via l'icône de la zone de "
+                "notification.",
+                "info",
+            )
+        except Exception:  # noqa: BLE001 — purement informatif
+            logger.debug("Notification de réduction indisponible.", exc_info=True)
 
 
     def win_move(self, x: int, y: int) -> dict:
@@ -115,10 +141,13 @@ class GuiApi:
 
     # -- état / dashboard ------------------------------------------------------
     def poll(self) -> dict:
-        """État courant + niveau RMS + révision du flux live (appelé ~5×/s par le JS).
+        """État courant + niveau RMS + révisions (appelé ~5×/s par le JS).
 
-        ``liveRev`` : compteur monotone du flux live/réunion. Le JS ne récupère le texte
-        (``get_live_text``) que lorsqu'il change → payload de polling minimal.
+        Payload volontairement minimal (modèle polling) : ``liveRev`` et ``noticeRev``
+        sont des compteurs monotones — le JS ne récupère le contenu (``get_live_text``,
+        ``get_notice``) que lorsqu'ils changent. ``modelOk`` pilote la bannière de
+        téléchargement du modèle ; ``modelLoaded`` distingue « Chargement du modèle… »
+        de « Transcription… » pendant l'état PROCESSING.
         """
         try:
             with self._app._lock:
@@ -133,7 +162,66 @@ class GuiApi:
             rev = int(self._app.live_rev())
         except Exception:  # noqa: BLE001
             rev = 0
-        return {"state": state, "level": level, "liveRev": rev}
+        try:
+            notice_rev = int(self._app.notice_rev())
+        except Exception:  # noqa: BLE001
+            notice_rev = 0
+        try:
+            model_ok = bool(self._app.model_ok())
+        except Exception:  # noqa: BLE001
+            model_ok = True
+        try:
+            model_loaded = bool(self._app.transcriber.is_loaded)
+        except Exception:  # noqa: BLE001
+            model_loaded = True
+        return {
+            "state": state,
+            "level": level,
+            "liveRev": rev,
+            "noticeRev": notice_rev,
+            "modelOk": model_ok,
+            "modelLoaded": model_loaded,
+        }
+
+    def get_notice(self) -> dict:
+        """Dernière notice utilisateur ({rev, text, kind}) — toast de la fenêtre.
+
+        Récupérée par le JS quand ``poll().noticeRev`` change (jamais en continu).
+        """
+        try:
+            return self._app.notice()
+        except Exception:  # noqa: BLE001
+            return {"rev": 0, "text": "", "kind": "info"}
+
+    # -- modèle Whisper (état + téléchargement opt-in) --------------------------
+    def model_status(self) -> dict:
+        """État du modèle pour la bannière du dashboard (absence + téléchargement).
+
+        Renvoie ``{ok, error, size, canDownload, sizeLabel, download:{state, message,
+        mb}}`` ; interrogé ponctuellement quand ``poll().modelOk`` est faux, puis par
+        polling pendant un téléchargement (comme l'installation GPU).
+        """
+        try:
+            return self._app.model_status()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lecture de l'état du modèle échouée")
+            return {
+                "ok": True, "error": "", "size": "", "canDownload": False,
+                "sizeLabel": "", "download": {"state": "idle", "message": "", "mb": 0},
+            }
+
+    def download_model(self) -> dict:
+        """Lance le téléchargement opt-in du modèle manquant. Non bloquant.
+
+        Seule exception réseau du projet (avec l'installation GPU) : déclenchée par un
+        clic explicite, suivie par polling ``model_status``. Fonctionne aussi dans
+        l'exe figé (huggingface_hub est embarqué).
+        """
+        try:
+            return self._app.start_model_download()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lancement du téléchargement du modèle échoué")
+            return {"ok": False, "error": "Téléchargement impossible (voir logs)."}
 
     def get_live_text(self) -> dict:
         """Flux live courant ({rev, text}) pour la tuile « Dernière transcription ».
@@ -211,7 +299,9 @@ class GuiApi:
             "statsDur": dur,
             "statsTrans": trans,
             "combo": c.hotkey.combo,
-            "model": c.transcription.model,
+            # Taille lisible : un modèle bundlé est un chemin (models/faster-whisper-
+            # medium) — la barre latérale doit afficher « whisper-medium », pas le chemin.
+            "model": model_size_name(c.transcription.model),
             "device": (device or c.transcription.device or "cpu").upper(),
         }
 
@@ -285,7 +375,11 @@ class GuiApi:
         c = self._app.config
         lang = c.transcription.language
         return {
-            "model": c.transcription.model,
+            # Taille normalisée (« medium »), même pour un modèle bundlé en chemin :
+            # les boutons de taille de l'écran Configuration raisonnent en tailles, et
+            # apply_config_from_gui compare sur la taille (pas d'écrasement d'un
+            # modèle local fonctionnel quand on enregistre sans changer de taille).
+            "model": model_size_name(c.transcription.model),
             "device": (c.transcription.device or "cpu").upper(),
             "langue": "auto" if not lang else lang,
             "mic": c.audio.device,
@@ -425,6 +519,7 @@ def launch_gui(app: "WhispertyApp") -> None:
             return True
         try:
             window.hide()
+            api.notify_hidden_once()
         except Exception:  # noqa: BLE001
             logger.exception("Masquage de la fenêtre échoué")
         return False

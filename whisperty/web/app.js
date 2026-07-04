@@ -89,7 +89,16 @@ const Mock = (() => {
       level: (state === "recording" || state === "live" || state === "conference")
         ? 0.35 + Math.random() * 0.5 : (state === "processing" ? 0.2 : 0),
       liveRev,
+      noticeRev: 0, modelOk: true, modelLoaded: true,
     }),
+    get_notice: () => ({ rev: 0, text: "", kind: "info" }),
+    // Modèle présent dans l'aperçu autonome (la bannière de téléchargement reste
+    // masquée ; le flux complet se voit avec le vrai backend).
+    model_status: () => ({
+      ok: true, error: "", size: "small", canDownload: true, sizeLabel: "~485 Mo",
+      download: { state: "idle", message: "", mb: 0 },
+    }),
+    download_model: () => ({ ok: true, state: "running" }),
     get_dashboard: () => ({ lastText, statsWords: stats.words, statsDur: stats.dur, statsTrans: stats.trans, combo: cfg.combo, model: cfg.model, device: cfg.device }),
     set_mode: (m) => { if (m) mode = m; return { ok: true }; },
     get_live_text: () => ({ rev: liveRev, text: liveLines.join("\n"), stamps: liveStamps.slice() }),
@@ -172,6 +181,9 @@ const ui = {
   liveLines: [],    // lignes du flux affiché (rendu + copie + citation de note)
   liveStamps: [],   // horodatage par ligne (parallèle) — ancrage des notes-citations (FR-25)
   noteStamp: null,  // horodatage en attente pour la prochaine note (« Noter » sur une ligne)
+  noticeRev: null,  // dernière notice vue (toasts) ; null = premier poll pas encore passé
+  modelOk: true,    // false = échec de chargement du modèle → bannière de téléchargement
+  modelLoaded: true, // modèle en mémoire ? (libellé « Chargement du modèle… » sinon)
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -295,7 +307,10 @@ function renderStatus(state) {
   // Ligne d'état (point + libellé), teintée par le mode quand la capture est active.
   const row = $("#status-row");
   if (state === "processing") {
-    row.innerHTML = `<span class="spinner"></span><span class="status-label" style="color:#fbbf24">Transcription…</span>`;
+    // Au démarrage (préchargement) le modèle n'est pas encore en mémoire : afficher
+    // « Transcription… » serait faux et déroutant — on nomme la vraie attente.
+    const busy = ui.modelLoaded ? "Transcription…" : "Chargement du modèle…";
+    row.innerHTML = `<span class="spinner"></span><span class="status-label" style="color:#fbbf24">${busy}</span>`;
   } else if (RUNNING.includes(state)) {
     row.innerHTML = `<span class="dot pulse" style="background:${t.accent};--ring:${t.ring}"></span><span class="status-label" style="color:${t.accent}">${RUN_LABEL[state] || "En cours"}</span>`;
   } else {
@@ -320,7 +335,8 @@ function renderStatus(state) {
     const label = ui.mode === "live" ? "Démarrer le live" : ui.mode === "conference" ? "Démarrer la réunion" : "Démarrer la dictée";
     slot.innerHTML = `<button class="btn-primary" id="rec-btn" style="background:${t.grad};box-shadow:0 6px 20px ${t.glow}"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="2" width="5" height="8" rx="2.5"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0"/><line x1="8" y1="12.5" x2="8" y2="14.5"/></svg>${label}</button>`;
   } else if (state === "processing") {
-    slot.innerHTML = `<button class="btn-busy" disabled><span class="spinner sm"></span>Traitement…</button>`;
+    const busy = ui.modelLoaded ? "Traitement…" : "Chargement du modèle…";
+    slot.innerHTML = `<button class="btn-busy" disabled><span class="spinner sm"></span>${busy}</button>`;
   } else {
     slot.innerHTML = `<button class="btn-stop" id="rec-btn"><svg width="14" height="14" viewBox="0 0 14 14"><rect x="2.5" y="2.5" width="9" height="9" rx="2" fill="currentColor"/></svg>Arrêter</button>`;
   }
@@ -347,13 +363,112 @@ function applyState(state) {
 }
 
 async function refreshState() {
-  const { state, level, liveRev } = await call("poll");
+  const p = await call("poll");
+  const { state, level, liveRev } = p;
+  // Modèle en mémoire ? (avant applyState : renderStatus lit ui.modelLoaded.)
+  const loaded = p.modelLoaded !== false;
+  if (loaded !== ui.modelLoaded) {
+    ui.modelLoaded = loaded;
+    if (state === ui.state && state === "processing") renderStatus(state);
+  }
   applyState(state);
   // Modulation discrète de l'amplitude par le niveau réel.
   const amp = Math.max(0.25, Math.min(1, 0.3 + level));
   $("#wave").style.setProperty("--amp", amp.toFixed(2));
   // Flux live « au fil de l'eau » : met à jour la tuile si de nouveaux segments sont arrivés.
   pollLiveFeed(state, liveRev);
+  // Retours utilisateur (toasts) et bannière modèle : payload minimal, contenu à la demande.
+  pollNotice(p.noticeRev);
+  pollModelBanner(p.modelOk !== false);
+}
+
+// ── Toasts (notices du backend) ──────────────────────────────────────────────
+// Le backend publie un compteur (noticeRev) ; le texte n'est récupéré qu'au
+// changement, puis affiché en toast (erreur micro/modèle, fin de session, copie…).
+async function pollNotice(rev) {
+  if (rev == null) return;
+  if (ui.noticeRev === null && rev === 0) { ui.noticeRev = 0; return; }  // rien à rejouer
+  if (rev === ui.noticeRev) return;
+  ui.noticeRev = rev;
+  const n = (await call("get_notice")) || {};
+  if (n.rev != null) ui.noticeRev = n.rev;
+  if (n.text) showToast(n.text, n.kind || "info");
+}
+
+function showToast(text, kind) {
+  const el = $("#toast");
+  if (!el) return;
+  $("#toast-text").textContent = text;
+  el.className = "toast " + (["error", "warn", "info"].includes(kind) ? kind : "info");
+  el.style.display = "flex";
+  clearTimeout(showToast._t);
+  // Les erreurs restent plus longtemps (le temps de lire l'action à faire).
+  showToast._t = setTimeout(hideToast, kind === "error" ? 9000 : 6000);
+}
+
+function hideToast() {
+  clearTimeout(showToast._t);
+  const el = $("#toast");
+  if (el) el.style.display = "none";
+}
+
+// ── Bannière modèle (téléchargement guidé) ───────────────────────────────────
+// Visible quand le dernier chargement du modèle a échoué (poll().modelOk faux) :
+// propose le téléchargement opt-in, suit sa progression (polling 1,5 s pendant le
+// téléchargement, comme l'installation GPU), puis disparaît quand le modèle charge.
+function pollModelBanner(ok) {
+  if (ok === ui.modelOk) return;
+  ui.modelOk = ok;
+  if (ok) hideModelBanner();
+  else refreshModelBanner();
+}
+
+function hideModelBanner() {
+  clearTimeout(refreshModelBanner._t);
+  const b = $("#model-banner");
+  if (b) b.style.display = "none";
+}
+
+async function refreshModelBanner() {
+  clearTimeout(refreshModelBanner._t);
+  const s = (await call("model_status")) || {};
+  const b = $("#model-banner");
+  if (!b) return;
+  if (s.ok || ui.modelOk) { hideModelBanner(); return; }
+  const dl = s.download || {};
+  let html;
+  if (dl.state === "running" || dl.state === "done") {
+    b.className = "model-banner running";
+    const head = dl.state === "done" ? "Modèle téléchargé — activation…" : (dl.message || "Téléchargement du modèle…");
+    const prog = dl.state === "running" && dl.mb ? `${(+dl.mb).toLocaleString("fr-FR")} Mo téléchargés. ` : "";
+    html = `<span class="mb-ico"><span class="spinner"></span></span>
+      <span class="mb-text"><b>${escapeHtml(head)}</b>
+      <span class="mb-sub">${prog}Téléchargement unique — ensuite, tout reste 100 % hors-ligne.</span></span>`;
+    refreshModelBanner._t = setTimeout(refreshModelBanner, 1500);
+  } else {
+    b.className = "model-banner";
+    const label = s.sizeLabel ? ` (${s.sizeLabel})` : "";
+    const sub = dl.state === "error"
+      ? (dl.message || "Le téléchargement a échoué.")
+      : "La dictée est indisponible sans modèle. Téléchargement unique ; ensuite tout reste hors-ligne.";
+    const btn = s.canDownload
+      ? `<button class="btn-primary sm" id="model-dl-btn"><span>${dl.state === "error" ? "Réessayer" : "Télécharger" + escapeHtml(label)}</span></button>`
+      : "";
+    html = `<span class="mb-ico">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#fbbf24" stroke-width="1.5"><path d="M10 3L2.5 16h15z" stroke-linejoin="round"/><line x1="10" y1="8" x2="10" y2="11.5"/><circle cx="10" cy="13.8" r="0.4" fill="#fbbf24"/></svg>
+      </span>
+      <span class="mb-text"><b>Le modèle Whisper « ${escapeHtml(s.size || "?")} » n'est pas installé.</b>
+      <span class="mb-sub">${escapeHtml(sub)}</span></span>${btn}`;
+  }
+  b.innerHTML = html;
+  b.style.display = "flex";
+  const btn = $("#model-dl-btn");
+  if (btn) btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const r = (await call("download_model")) || {};
+    if (r.ok === false && r.error) showToast(r.error, "error");
+    refreshModelBanner();
+  });
 }
 
 async function loadVersion() {
@@ -370,7 +485,17 @@ async function loadDashboard() {
   const d = await call("get_dashboard");
   // En flux live/conférence, la tuile est pilotée par pollLiveFeed : ne pas l'écraser.
   if (!isLiveFeed(ui.state)) {
-    $("#last-text").textContent = d.lastText || "Aucune transcription pour le moment.";
+    const el = $("#last-text");
+    if (d.lastText) {
+      el.textContent = d.lastText;
+    } else {
+      // Premier lancement (historique vide) : guider le premier geste plutôt
+      // qu'afficher un tiret — le raccourci réel est mis en évidence.
+      const keys = comboToKeys(d.combo)
+        .map(k => `<span class="kbd">${escapeHtml(k)}</span>`)
+        .join('<span class="kbd-plus">+</span>');
+      el.innerHTML = `<span class="hint">Aucune transcription pour le moment. Appuyez sur ${keys}, parlez, faites une courte pause : le texte s'insère dans l'application active.</span>`;
+    }
   }
   $("#stat-words").textContent = (d.statsWords || 0).toLocaleString("fr-FR");
   $("#stat-dur").textContent = d.statsDur || 0;
@@ -966,6 +1091,7 @@ function init() {
   bindHistory();
   bindNotes();
   bindTitlebar();
+  $("#toast").addEventListener("click", hideToast);
   renderStatus("idle");
   renderModeDesc();
   loadVersion();

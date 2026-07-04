@@ -8,6 +8,26 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ### Ajouté
 
+- **Téléchargement guidé du modèle** — si le modèle Whisper n'est pas installé (installeur
+  léger `-NoModel`, taille changée, cache vide en mode hors-ligne), le tableau de bord
+  affiche désormais une bannière qui propose de le télécharger **en un clic** (poids
+  annoncé, progression suivie). Le modèle est installé dans `models/` à côté de la
+  configuration, qui repasse automatiquement en `local_files_only: true` — le
+  téléchargement, explicitement déclenché, reste la seule exception réseau du projet.
+  Fini la modification manuelle de `config.yaml` décrite dans l'ancien démarrage rapide.
+- **Erreurs et évènements enfin visibles** — micro inaccessible, modèle absent, échec de
+  transcription, fin de session live/réunion, résumé prêt… sont maintenant signalés par
+  une notification Windows **et** un toast dans la fenêtre, au lieu de finir uniquement
+  dans les fichiers de logs (l'application semblait « muette » en cas de problème).
+- **Instance unique** — relancer Whisperty (icône du menu Démarrer alors que l'app tourne
+  déjà dans la zone de notification) **réaffiche la fenêtre existante** au lieu de créer
+  un doublon qui se disputerait le raccourci global et le micro.
+- **Premier lancement plus accueillant** — le préchargement du modèle s'affiche comme
+  « Chargement du modèle… » (au lieu d'un « Transcription… » trompeur) ; quand l'historique
+  est vide, la tuile principale explique le premier geste (raccourci réel mis en évidence) ;
+  la première réduction dans la zone de notification est signalée (« Whisperty reste
+  actif en arrière-plan »).
+
 - **Notes en session (Live continu / Conférence)** — pendant une transcription live ou une
   réunion, il est désormais possible de prendre des notes personnelles horodatées sans
   interrompre la capture :
@@ -35,6 +55,14 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ### Modifié
 
+- **Installeur et build de déploiement** — la mise à jour ferme proprement l'instance en
+  cours avant de copier les fichiers (plus de blocage « fichiers en cours d'utilisation ») ;
+  si WebView2 manque, l'installeur propose d'**ouvrir la page de téléchargement** au lieu
+  d'afficher une URL à recopier ; la configuration expédiée revient à des défauts neutres
+  (CPU, IA locale et résumé désactivés — opt-in documenté), indépendamment des réglages du
+  poste de build. L'écran Configuration protège par ailleurs un modèle bundlé : enregistrer
+  sans changer de taille ne remplace plus le chemin local par un nom de taille à
+  re-télécharger.
 - **Robustesse de la capture micro** — les erreurs de périphérique (nom/index invalide,
   débranchement en cours d'enregistrement) sont maintenant absorbées proprement : l'état
   interne est toujours réinitialisé, ce qui évite qu'un enregistrement reste bloqué

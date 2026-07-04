@@ -98,6 +98,32 @@ Type: filesandordirs; Name: "{app}\logs"
 Type: filesandordirs; Name: "{app}\_internal\__pycache__"
 
 [Code]
+{ Ferme l'instance en cours d'exécution avant d'écrire les fichiers. Whisperty est
+  une app de zone de notification : sa fenêtre (masquée) intercepte la fermeture
+  pour se réduire dans le tray, si bien que la fermeture « douce » du Restart
+  Manager (CloseApplications=yes) ne la quitte PAS — les fichiers resteraient
+  verrouillés et la mise à jour échouerait. taskkill est le repli pragmatique,
+  exécuté à l'installation ET à la désinstallation. }
+procedure KillRunningApp();
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#MyAppExeName}', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillRunningApp();
+  Result := '';
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    KillRunningApp();
+end;
+
 { Détection du runtime Edge WebView2 (Evergreen). Non bloquant : sans lui, Whisperty
   démarre en mode zone de notification seule (la fenêtre nécessite WebView2). }
 function WebView2Installed(): Boolean;
@@ -114,13 +140,21 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ErrorCode: Integer;
 begin
   if (CurStep = ssPostInstall) and (not WebView2Installed()) then
-    MsgBox(
+  begin
+    { Dialogue ACTIONNABLE : proposer d'ouvrir la page de téléchargement plutôt
+      que d'afficher une URL à recopier. }
+    if MsgBox(
       'Microsoft Edge WebView2 ne semble pas installé sur ce poste.' + #13#10 + #13#10 +
       'Whisperty fonctionnera quand même (dictée, raccourci, zone de notification),' + #13#10 +
       'mais la FENÊTRE (tableau de bord, configuration, historique) ne s''ouvrira pas.' + #13#10 + #13#10 +
-      'Pour l''activer, installez « Microsoft Edge WebView2 Runtime » (Evergreen) :' + #13#10 +
-      'https://developer.microsoft.com/microsoft-edge/webview2/',
-      mbInformation, MB_OK);
+      'Voulez-vous ouvrir la page de téléchargement de « Microsoft Edge WebView2' + #13#10 +
+      'Runtime » (Evergreen) maintenant ?',
+      mbConfirmation, MB_YESNO) = IDYES then
+      ShellExec('open', 'https://developer.microsoft.com/microsoft-edge/webview2/',
+                '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+  end;
 end;

@@ -39,7 +39,10 @@ flowchart LR
   (le **défaut**), l'app fonctionne 100 % hors-ligne — vérifiable à Wireshark.
 - ⚡ **Partout dans Windows** — la transcription s'injecte dans la fenêtre active, sans copier-coller.
 - 🇫🇷 **Pensé pour le français** — collage presse-papiers fiable pour les accents, dictionnaire métier, profils par application.
-- 🧩 **Sans friction** — une icône dans la zone de notification, un raccourci global, un seul fichier `config.yaml`.
+- 🧩 **Sans friction** — une icône dans la zone de notification, un raccourci global, un seul
+  fichier `config.yaml`. Modèle manquant ? La fenêtre propose de le télécharger en un clic.
+  Relancer l'exe réaffiche la fenêtre (instance unique) ; erreurs et fins de session sont
+  notifiées, pas enfouies dans les logs.
 - 🆓 **Libre et hackable** — Python pur, modules clairs, aucune dépendance propriétaire.
 
 ## Fonctionnalités
@@ -83,17 +86,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**2. Télécharger le modèle (une seule fois)**
-
-```powershell
-# Pré-télécharge le modèle défini dans config.yaml (medium par défaut) :
-python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"
-```
-
-> Alternative : passez temporairement `local_files_only: false` dans `config.yaml`, lancez
-> l'app une fois (le modèle se télécharge), puis remettez `true`.
-
-**3. Lancer**
+**2. Lancer**
 
 ```powershell
 python -m whisperty                       # fenêtre + icône tray + raccourci global
@@ -101,7 +94,12 @@ python -m whisperty --no-gui              # zone de notification seule
 python -m whisperty --config mon.yaml     # configuration personnalisée
 ```
 
-**4. Dicter**
+> **Modèle absent au premier lancement ?** Le tableau de bord affiche une bannière
+> « Télécharger » : un clic récupère le modèle (une seule fois, ~1,5 Go pour `medium`),
+> l'installe dans `models/` et repasse l'application en 100 % hors-ligne. Pour le
+> pré-stager en avance de phase : `python scripts\fetch_model.py --model medium`.
+
+**3. Dicter**
 
 Appuyez sur **Ctrl+Alt+Espace**, parlez, ré-appuyez (ou faites une pause) : le texte s'insère
 dans la fenêtre active.
@@ -160,8 +158,10 @@ Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Win
 ```
 
 L'installeur s'installe **par utilisateur** (`%LocalAppData%\Programs\Whisperty`, sans droits
-admin), crée les raccourcis, propose le démarrage avec Windows et préserve config/historique
-lors d'une mise à jour. Variantes build : `-Model small` · `-NoModel`.
+admin), crée les raccourcis, propose le démarrage avec Windows, ferme proprement une instance
+en cours lors d'une mise à jour et préserve config/historique. Si WebView2 manque, il propose
+d'ouvrir la page de téléchargement. Variantes build : `-Model small` · `-NoModel` (l'app
+proposera alors le téléchargement du modèle au premier lancement).
 
 > Procédure détaillée : **[`installer/README.md`](installer/README.md)**.
 
@@ -202,6 +202,8 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `conference.py` | Mode réunion |
 | `gui.py` · `web/` | Fenêtre WebView2 (pywebview) + pont Python↔JS + assets UI |
 | `configio.py` | Écriture chirurgicale de `config.yaml` (préserve commentaires/ordre) |
+| `modeldl.py` | Téléchargement opt-in du modèle depuis l'UI (bannière du dashboard) |
+| `singleinstance.py` | Instance unique (relancer l'exe réaffiche la fenêtre) |
 
 Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md).
 

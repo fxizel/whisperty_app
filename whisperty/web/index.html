@@ -104,6 +104,10 @@
         <!-- Courte explication du mode sélectionné (mise à jour par JS, accent = couleur du mode). -->
         <p class="mode-desc" id="mode-desc"><!-- rempli par JS --></p>
 
+        <!-- Bannière modèle : visible quand le modèle Whisper n'a pas pu être chargé.
+             Propose le téléchargement guidé (opt-in, seule exception réseau) — rempli par JS. -->
+        <div class="model-banner" id="model-banner" style="display:none;"></div>
+
         <div class="status-card">
           <div class="status-row" id="status-row"><!-- rempli par JS --></div>
           <!-- Choix de la source audio (sortie système à capturer) — modes Live/Conférence.
@@ -320,6 +324,12 @@
       </section>
 
     </div>
+  </div>
+
+  <!-- Toast des retours utilisateur (notices du backend : erreurs, fins de session…).
+       Rempli/affiché par JS quand poll().noticeRev change ; clic = fermeture. -->
+  <div class="toast" id="toast" style="display:none;" role="status">
+    <span class="toast-dot"></span><span id="toast-text"></span>
   </div>
 </div>
 

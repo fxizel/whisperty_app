@@ -58,6 +58,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
 | `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
 | `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
+| `modeldl.py` | Téléchargement **opt-in** du modèle Whisper depuis l'UI (bannière dashboard ; doctrine de `cuda.py`) | fait (V2) |
+| `singleinstance.py` | Instance unique (mutex + évènement nommés Win32) : relancer l'exe réaffiche la fenêtre ; no-op hors Windows | fait (V2) |
 | `web/` | Assets de l'UI (`index.html`, `styles.css`, `app.js`) — rendu fidèle de la maquette, **police système** (pas de Google Fonts) | fait (V2) |
 
 ## Concurrence (à préserver)
@@ -96,6 +98,14 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   l'état sous `_lock`, puis appelle `add_note` du transcriber **hors** verrou. JAMAIS de
   traitement de note dans les threads de capture (RE-11) ; l'affichage passe par le flux
   existant (`_append_live_line` → `_live_rev`), pas de payload ajouté au polling.
+- **Notices utilisateur (V2)** : `WhispertyApp._notify_user` publie {rev, text, kind} sous
+  `_notice_lock` — **verrou feuille**, même modèle que `_live_lock` (jamais imbriqué ; les
+  appelants le prennent hors de `_lock` ou après l'avoir relâché). Le JS ne récupère
+  `get_notice` que quand `poll().noticeRev` change (polling, payload minimal — pas de push).
+  Toute erreur qui change le comportement PERÇU (micro, modèle, échec de dictée/import) DOIT
+  passer par `_notify_user` (toast + notification tray), pas seulement par les logs.
+  `_model_error` (même verrou) mémorise le dernier échec de chargement du modèle et pilote la
+  bannière de téléchargement du dashboard (`poll().modelOk`).
 - **Interface fenêtre (V2)** : `webview.start()` exige le **thread principal** ; le tray tourne
   donc **détaché** (`Tray.run_detached()`) et `launch_gui()` bloque le thread principal. Les
   méthodes de `GuiApi` (pont) et les actions tray s'exécutent sur d'AUTRES threads et délèguent à
@@ -126,6 +136,24 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   modèle), jamais silencieux, indisponible en exe figé (`can_install`=false, pas de pip).
 - **Confidentialité** : `local_files_only` est **true par défaut** (zéro réseau) ; en mode
   hors-ligne, `transcriber.load()` pose aussi `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`.
+- **Modèle manquant → téléchargement guidé (V2, `modeldl.py`)** : si le chargement échoue
+  (`ModelNotAvailableError`), la bannière du dashboard propose le téléchargement **opt-in**
+  (même doctrine que `cuda.py` : jamais silencieux, progression par polling `model_status`,
+  fonctionne AUSSI en exe figé — huggingface_hub est embarqué). Le modèle est matérialisé dans
+  `models/faster-whisper-<taille>` à côté de la config, puis `config.yaml` est pointé dessus
+  avec `local_files_only: true` (`_on_model_downloaded`). ⚠️ **Contrat taille↔chemin** : l'UI
+  raisonne en TAILLES (`medium`) alors que la config peut contenir un chemin bundlé — la
+  normalisation (`modeldl.model_size_name`) doit rester appliquée aux 3 endroits :
+  `get_dashboard`, `get_config` et `apply_config_from_gui` (qui compare les tailles et
+  privilégie un dossier local existant, sinon enregistrer sans changer de taille écraserait un
+  modèle bundlé fonctionnel).
+- **Instance unique (V2, `singleinstance.py`)** : mutex nommé `Local\Whisperty.SingleInstance`
+  (par session, cohérent avec l'installation par utilisateur) + évènement « montre-toi » que le
+  second lancement déclenche avant de sortir (`__main__` → `on_second_instance` → fenêtre
+  réaffichée, ou notification en mode tray seul). Règle : la garde ne doit JAMAIS empêcher un
+  lancement (échec d'API Win32 = démarrage normal) ; no-op hors Windows. Les tests utilisent des
+  noms d'objets uniques (pas de collision avec une instance réelle) et une doublure kernel32
+  (`_k32_cached`) pour couvrir les chemins Windows sur la CI Linux.
 - **IA locale (V2)** : `ai.py` n'autorise QUE des endpoints locaux (`ai.is_local_endpoint` :
   localhost/127.0.0.1/::1) et est **désactivé par défaut**. Tout endpoint distant est refusé —
   le texte dicté ne doit jamais sortir de la machine. Échec LLM = texte brut conservé (jamais bloquant).
@@ -225,11 +253,19 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   (le CWD n'est pas fiable au démarrage auto / figé) ; un nom de taille reste passé tel quel. Variante
   `build.ps1 -NoModel` → `local_files_only: false` (le modèle, et la vérif de révision HF, passent par le
   réseau au 1er usage) — d'où le bundling comme défaut conforme à la contrainte cardinale.
+- **Défauts d'expédition (build.ps1)** : le `config.yaml` du dépôt reflète le POSTE DE DEV (CUDA,
+  LLM local actif). `build.ps1` patche la copie expédiée vers des défauts neutres :
+  `device: cpu`/`int8`, `ai.enabled: false`, `summary.enabled: false` (un poste vierge n'a ni
+  composants CUDA ni serveur LLM — sinon avertissements et échecs journalisés à chaque usage).
+  NE PAS « corriger » le config.yaml du dépôt pour l'expédition : c'est le rôle de ce patch.
 - **Installeur (`installer/whisperty.iss`, Inno Setup)** : installation **par utilisateur** dans
   `%LocalAppData%\Programs\Whisperty` (sans admin) — INDISPENSABLE car l'app écrit `config.yaml` (édité via
   l'UI), `whisperty.db`, `logs\`, `transcriptions\` À CÔTÉ de l'exe (échouerait sous `Program Files`).
   Autostart = clé `HKCU\…\Run` (cohérent avec `scripts\install_autostart.ps1`). `config.yaml`/`dictionary.txt`
-  posés en `onlyifdoesntexist` (MAJ préserve les réglages). WebView2 vérifié, non bloquant.
+  posés en `onlyifdoesntexist` (MAJ préserve les réglages). WebView2 vérifié, non bloquant : s'il manque, un
+  dialogue propose d'OUVRIR la page de téléchargement. MAJ/désinstallation : `KillRunningApp` (taskkill dans
+  `PrepareToInstall`/`CurUninstallStepChanged`) — la fermeture « douce » Restart Manager ne quitte PAS une
+  app de tray (sa fenêtre intercepte la fermeture pour se masquer), les fichiers resteraient verrouillés.
 
 ## Conventions
 

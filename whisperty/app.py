@@ -22,6 +22,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import modeldl
 from .ai import LocalLLM
 from .conference import ConferenceTranscriber
 from .config import Config
@@ -103,6 +104,17 @@ class WhispertyApp:
         # l'action « Noter » de l'UI d'ancrer une note-citation à SON segment (FR-25).
         self._live_stamps: list[str] = []
         self._live_rev = 0
+        # V2 : retours utilisateur VISIBLES (« toast » de la fenêtre + notification
+        # système) — une erreur qui ne va qu'aux logs (micro absent, modèle manquant)
+        # laisse l'app muette en apparence. Publié sous _notice_lock (verrou feuille,
+        # jamais imbriqué) et relevé par GuiApi.poll via noticeRev (modèle polling,
+        # payload minimal, comme le flux live). _model_error mémorise le dernier échec
+        # de chargement du modèle : il pilote la bannière « Télécharger » du dashboard.
+        self._notice_lock = threading.Lock()
+        self._notice_rev = 0
+        self._notice_text = ""
+        self._notice_kind = "info"
+        self._model_error: str | None = None
         # V2 : transcription live d'une sortie audio (loopback).
         self.live = LiveTranscriber(
             config,
@@ -180,6 +192,7 @@ class WhispertyApp:
                 self.recorder.start()
             except MicrophoneError as exc:
                 logger.error("%s", exc)
+                self._notify_user(str(exc))
                 return
             # Capture l'application au premier plan (= cible de l'injection) pour
             # choisir le profil de contexte. Lecture locale rapide ; None si désactivé.
@@ -273,6 +286,7 @@ class WhispertyApp:
         try:
             profile = self.profiles.for_app(app_name)
             text = self.transcriber.transcribe(audio, profile)
+            self._set_model_error(None)  # le chargement a réussi : bannière levée
             text = self.llm.refine(text)  # raffinage LLM local (no-op si désactivé)
             if text:
                 logger.info("Texte : %s", text)
@@ -283,10 +297,16 @@ class WhispertyApp:
                 )
             else:
                 logger.info("Transcription vide (aucune parole détectée).")
+                # Bénin mais déroutant (« j'ai parlé, rien ne s'insère ») : signalé
+                # dans la fenêtre seulement, sans notification Windows.
+                self._notify_user("Aucune parole détectée.", "warn", tray=False)
         except ModelNotAvailableError as exc:
             logger.error("%s", exc)
+            self._set_model_error(exc)
+            self._notify_user(self._model_unavailable_message())
         except Exception:  # noqa: BLE001
             logger.exception("Échec du traitement de la dictée")
+            self._notify_user("La transcription a échoué — détails dans logs/whisperty.log.")
         finally:
             with self._lock:
                 # Ne remettre IDLE que si l'on est toujours en PROCESSING
@@ -316,6 +336,7 @@ class WhispertyApp:
         name = os.path.basename(path)
         try:
             text = self.transcriber.transcribe_file(path)
+            self._set_model_error(None)
             text = self.llm.refine(text)
             if text:
                 logger.info("Fichier « %s » transcrit : %d caractères.", name, len(text))
@@ -325,17 +346,27 @@ class WhispertyApp:
                     model=self.config.transcription.model,
                 )
                 if copied:
-                    self.tray.notify(f"« {name} » transcrit et copié dans le presse-papiers.")
+                    self._notify_user(
+                        f"« {name} » transcrit et copié dans le presse-papiers.", "info"
+                    )
                 else:
-                    self.tray.notify(f"« {name} » transcrit (copie presse-papiers indisponible).")
+                    self._notify_user(
+                        f"« {name} » transcrit (copie presse-papiers indisponible).", "warn"
+                    )
             else:
-                self.tray.notify(f"« {name} » : aucune parole détectée.")
+                self._notify_user(f"« {name} » : aucune parole détectée.", "warn")
         except FileNotFoundError as exc:
             logger.error("%s", exc)
+            self._notify_user(str(exc))
         except ModelNotAvailableError as exc:
             logger.error("%s", exc)
+            self._set_model_error(exc)
+            self._notify_user(self._model_unavailable_message())
         except Exception:  # noqa: BLE001
             logger.exception("Échec de l'import audio")
+            self._notify_user(
+                f"L'import de « {name} » a échoué — détails dans logs/whisperty.log."
+            )
         finally:
             with self._lock:
                 if self._state is TrayState.PROCESSING:
@@ -416,6 +447,103 @@ class WhispertyApp:
                 "stamps": list(self._live_stamps),
             }
 
+    # -- retours utilisateur visibles (V2) ---------------------------------------
+    def _notify_user(self, message: str, kind: str = "error", tray: bool = True) -> None:
+        """Signale un évènement À L'UTILISATEUR : toast fenêtre + notification système.
+
+        Complément de la journalisation (qui reste la source détaillée) : tout ce qui
+        change le comportement perçu (échec de dictée, fin de session, modèle absent)
+        doit être visible sans ouvrir les logs. ``kind`` : ``error`` | ``warn`` |
+        ``info`` (teinte du toast). ``tray=False`` réserve le message à la fenêtre
+        (cas bénins, pour ne pas inonder les notifications Windows). Best-effort,
+        jamais bloquant.
+        """
+        if tray:
+            self.tray.notify(message)
+        with self._notice_lock:
+            self._notice_rev += 1
+            self._notice_text = message
+            self._notice_kind = kind
+
+    def notice_rev(self) -> int:
+        """Compteur monotone des notices (lu par GuiApi.poll, payload minimal)."""
+        with self._notice_lock:
+            return self._notice_rev
+
+    def notice(self) -> dict:
+        """Dernière notice ({rev, text, kind}) — récupérée par le JS quand rev change."""
+        with self._notice_lock:
+            return {"rev": self._notice_rev, "text": self._notice_text, "kind": self._notice_kind}
+
+    # -- état / téléchargement du modèle (V2) ------------------------------------
+    def _set_model_error(self, exc: object = None) -> None:
+        """Mémorise (ou efface, avec None) le dernier échec de chargement du modèle."""
+        with self._notice_lock:
+            self._model_error = None if exc is None else str(exc)
+
+    def model_ok(self) -> bool:
+        """False si le dernier chargement du modèle a échoué (bannière du dashboard)."""
+        with self._notice_lock:
+            return self._model_error is None
+
+    def _model_unavailable_message(self) -> str:
+        """Message actionnable quand le modèle manque (toast + notification)."""
+        size = modeldl.model_size_name(self.config.transcription.model)
+        if modeldl.is_downloadable(size):
+            return (
+                f"Le modèle Whisper « {size} » n'est pas installé. "
+                "Ouvrez Whisperty pour le télécharger en un clic."
+            )
+        return f"Modèle Whisper « {size} » indisponible — détails dans logs/whisperty.log."
+
+    def model_status(self) -> dict:
+        """État du modèle pour la bannière du dashboard (échec + téléchargement)."""
+        size = modeldl.model_size_name(self.config.transcription.model)
+        with self._notice_lock:
+            error = self._model_error
+        return {
+            "ok": error is None,
+            "error": error or "",
+            "size": size,
+            "canDownload": modeldl.is_downloadable(size),
+            "sizeLabel": modeldl.approx_size_label(size),
+            "download": modeldl.status(),
+        }
+
+    def start_model_download(self) -> dict:
+        """Télécharge le modèle manquant (opt-in explicite, bannière du dashboard).
+
+        Avec l'installation GPU, c'est la seule exception réseau du projet — jamais
+        silencieuse. Le modèle est matérialisé dans ``models/`` à côté de la config,
+        qui est ensuite pointée dessus avec ``local_files_only: true`` (zéro réseau
+        à l'usage ensuite). Non bloquant : progression suivie par ``model_status``.
+        """
+        size = modeldl.model_size_name(self.config.transcription.model)
+        return modeldl.start_download(
+            size, self.config.resolve("models"), self._on_model_downloaded
+        )
+
+    def _on_model_downloaded(self, size: str, target: object) -> None:
+        """Bascule la config sur le modèle téléchargé et précharge (thread du téléchargement)."""
+        from .configio import update_yaml_file
+
+        rel = f"models/faster-whisper-{size}"
+        c = self.config
+        c.transcription.model = rel
+        c.transcription.local_files_only = True
+        try:
+            update_yaml_file(
+                self.config.resolve("config.yaml"),
+                {"transcription.model": rel, "transcription.local_files_only": True},
+            )
+        except OSError:
+            # Non bloquant : le modèle est actif pour CETTE session ; la persistance
+            # pourra être refaite depuis l'écran Configuration.
+            logger.exception("Écriture de config.yaml échouée après le téléchargement du modèle")
+        self._set_model_error(None)
+        self._reload_model()  # rechargement paresseux + préchauffe si l'app est au repos
+        self._notify_user(f"Modèle « {size} » installé — la dictée est prête.", "info")
+
     # -- notes en session (UC-16) ------------------------------------------------
     def add_note(self, text: object = None, stamp: object = None) -> dict:
         """Crée une note utilisateur pendant une session live/réunion (UC-16).
@@ -471,7 +599,7 @@ class WhispertyApp:
         summary = self.llm.summarize(text)
         if not summary:
             # summarize() a déjà journalisé la cause (serveur muet, endpoint refusé…).
-            self.tray.notify(f"Résumé de {mode} indisponible (LLM local muet ou refusé).")
+            self._notify_user(f"Résumé de {mode} indisponible (LLM local muet ou refusé).", "warn")
             return
         if path:
             try:
@@ -488,7 +616,7 @@ class WhispertyApp:
             )
         except Exception:  # noqa: BLE001 — l'app peut être en cours d'arrêt (base fermée)
             logger.exception("Archivage du résumé échoué")
-        self.tray.notify(f"Résumé de {mode} prêt (transcript + historique).")
+        self._notify_user(f"Résumé de {mode} prêt (transcript + historique).", "info")
 
     def add_note_bookmark(self) -> None:
         """Signet : note horodatée sans texte saisi (raccourci global, UC-16).
@@ -499,7 +627,7 @@ class WhispertyApp:
         """
         result = self.add_note("Moment marqué")
         if result.get("ok"):
-            self.tray.notify("Signet ajouté à la transcription.")
+            self._notify_user("Signet ajouté à la transcription.", "info")
 
     # -- transcription live d'une sortie audio (V2) ----------------------------
     def start_live(self, device_spec: object = None) -> None:
@@ -515,7 +643,9 @@ class WhispertyApp:
                 return
             if self._state is not TrayState.IDLE:
                 logger.info("Transcription live ignorée : une autre opération est en cours.")
-                self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
+                self._notify_user(
+                    "Impossible : une dictée ou transcription est déjà en cours.", "warn"
+                )
                 return
             self._set_state(TrayState.LIVE)
         # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
@@ -554,16 +684,17 @@ class WhispertyApp:
             if self._state is TrayState.LIVE:
                 self._set_state(TrayState.IDLE)
         if error:
-            self.tray.notify(f"Transcription live arrêtée : {error}")
+            self._notify_user(f"Transcription live arrêtée : {error}")
         elif text:
             notes = result.get("notes", 0)
             extra = f" et {notes} note(s)" if notes else ""
-            self.tray.notify(
+            self._notify_user(
                 f"Transcription live arrêtée — {count} segment(s){extra} "
-                "copiés dans le presse-papiers."
+                "copiés dans le presse-papiers.",
+                "info",
             )
         else:
-            self.tray.notify("Transcription live arrêtée — aucun texte transcrit.")
+            self._notify_user("Transcription live arrêtée — aucun texte transcrit.", "warn")
         # Résumé de fin de session (UC-17) : APRÈS l'archivage et le retour IDLE.
         if not error and text:
             self._maybe_summarize(text, result.get("path"), "live")
@@ -582,14 +713,16 @@ class WhispertyApp:
                 return
             if self._state is not TrayState.IDLE:
                 logger.info("Réunion ignorée : une autre opération est en cours.")
-                self.tray.notify("Impossible : une dictée ou transcription est déjà en cours.")
+                self._notify_user(
+                    "Impossible : une dictée ou transcription est déjà en cours.", "warn"
+                )
                 return
             self._set_state(TrayState.CONFERENCE)
         # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
         self._reset_live_transcript()
         # Rappel consentement (tout reste local).
-        self.tray.notify(
-            "Réunion : pensez au consentement des participants. Tout reste local."
+        self._notify_user(
+            "Réunion : pensez au consentement des participants. Tout reste local.", "info"
         )
         if not self.conference.start(device_spec):
             logger.warning("Le mode réunion n'a pas pu démarrer.")
@@ -625,14 +758,17 @@ class WhispertyApp:
         notes = result.get("notes", 0)
         extra = f", {notes} note(s)" if notes else ""
         if error:
-            self.tray.notify(f"Réunion arrêtée : {error}")
+            self._notify_user(f"Réunion arrêtée : {error}")
         elif path:
-            self.tray.notify(
+            self._notify_user(
                 f"Réunion terminée — {count} segment(s){extra} (sources : {sources}). "
-                f"Transcript : {path}"
+                f"Transcript : {path}",
+                "info",
             )
         else:
-            self.tray.notify(f"Réunion terminée — {count} segment(s){extra} (sources : {sources}).")
+            self._notify_user(
+                f"Réunion terminée — {count} segment(s){extra} (sources : {sources}).", "info"
+            )
         # Résumé de fin de session (UC-17) : APRÈS l'archivage et le retour IDLE.
         if not error and text:
             self._maybe_summarize(text, path, "réunion")
@@ -642,10 +778,10 @@ class WhispertyApp:
         """Copie la dernière transcription dans le presse-papiers (menu tray)."""
         text = self.history.last_text()
         if not text:
-            self.tray.notify("Historique vide.")
+            self._notify_user("Historique vide.", "warn")
             return
         if self.injector.copy_to_clipboard(text):
-            self.tray.notify("Dernière transcription copiée.")
+            self._notify_user("Dernière transcription copiée.", "info")
 
     def open_history(self) -> None:
         """Ouvre le dossier contenant la base d'historique."""
@@ -682,6 +818,24 @@ class WhispertyApp:
         except Exception:  # noqa: BLE001
             logger.exception("Affichage de la fenêtre échoué")
 
+    def on_second_instance(self) -> None:
+        """Réagit à un second lancement de l'exécutable (garde d'instance unique).
+
+        Comportement attendu d'une app de zone de notification : « je relance
+        Whisperty, sa fenêtre apparaît » — pas un doublon qui se disputerait le
+        raccourci global et le micro. Appelé depuis le thread veilleur de
+        ``singleinstance.watch`` ; ``show_window`` est déjà thread-safe.
+        """
+        logger.info("Second lancement détecté : réaffichage de la fenêtre.")
+        with self._lock:
+            has_gui = self._gui is not None
+        if has_gui:
+            self.show_window()
+        else:
+            self._notify_user(
+                "Whisperty est déjà lancé — icône dans la zone de notification.", "info"
+            )
+
     def apply_config_from_gui(self, payload: dict) -> dict:
         """Applique et persiste les réglages de l'écran Configuration.
 
@@ -698,10 +852,20 @@ class WhispertyApp:
 
         try:
             # -- transcription (model/device/local_files_only => rechargement) --
-            if "model" in payload and str(payload["model"]) != c.transcription.model:
-                c.transcription.model = str(payload["model"])
-                updates["transcription.model"] = c.transcription.model
-                reload_model = True
+            # L'UI manipule des TAILLES (« medium ») alors que la config peut contenir
+            # un chemin bundlé (« models/faster-whisper-medium ») : comparaison sur la
+            # taille normalisée, sinon enregistrer sans rien toucher écraserait un
+            # modèle local fonctionnel par un nom de taille absent du cache.
+            if "model" in payload:
+                new_size = modeldl.model_size_name(payload["model"])
+                if new_size != modeldl.model_size_name(c.transcription.model):
+                    # Un modèle déjà téléchargé/bundlé dans models/ est privilégié
+                    # (hors-ligne) ; sinon le nom de taille (cache Hugging Face).
+                    local_rel = f"models/faster-whisper-{new_size}"
+                    has_local = (self.config.resolve(local_rel) / "model.bin").is_file()
+                    c.transcription.model = local_rel if has_local else new_size
+                    updates["transcription.model"] = c.transcription.model
+                    reload_model = True
             if "device" in payload:
                 dev = "cuda" if str(payload["device"]).lower() == "cuda" else "cpu"
                 if dev != c.transcription.device:
@@ -1120,8 +1284,11 @@ class WhispertyApp:
                 self._set_state(TrayState.PROCESSING)
         try:
             self.transcriber.load()
+            self._set_model_error(None)
         except ModelNotAvailableError as exc:
             logger.error("Modèle non préchargé : %s", exc)
+            self._set_model_error(exc)
+            self._notify_user(self._model_unavailable_message())
         finally:
             with self._lock:
                 if self._state is TrayState.PROCESSING:

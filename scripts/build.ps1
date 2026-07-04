@@ -87,6 +87,16 @@ if (-not (Test-Path "$appDir\whisperty.exe")) { throw "whisperty.exe introuvable
 Copy-Item "$root\config.yaml" $appDir -Force
 Copy-Item "$root\dictionary.txt" $appDir -Force
 
+# Défauts d'expédition NEUTRES : le config.yaml du dépôt reflète le poste de dev
+# (CUDA actif, LLM local LM Studio…). Un poste cible vierge n'a ni composants CUDA
+# (repli CPU avec avertissement à chaque chargement) ni serveur LLM (tentative +
+# échec journalisé à chaque dictée, notification « résumé indisponible » à chaque
+# session). On expédie donc : CPU, IA locale et résumé désactivés (opt-in documenté,
+# réactivables depuis l'écran Configuration). Commentaires du YAML préservés.
+Invoke-Checked {
+    & $py -c "from whisperty.configio import update_yaml_file; update_yaml_file(r'$appDir\config.yaml', {'transcription.device':'cpu','transcription.compute_type':'int8','ai.enabled':False,'summary.enabled':False})"
+} "patch config (défauts d'expédition)"
+
 # --- 7. Modèle Whisper ---------------------------------------------------------
 $bundleModel = $null
 if (-not $NoModel) {

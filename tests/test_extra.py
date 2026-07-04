@@ -45,6 +45,34 @@ def test_default_config_path() -> None:
     print("[extra 1] __main__._default_config_path : relatif + figé  OK")
 
 
+class _FakeGuard:
+    """Doublure de la garde d'instance unique : pas de vrais objets noyau Windows
+    pendant les tests (et aucune collision avec une instance réelle de Whisperty)."""
+
+    instances: list["_FakeGuard"] = []
+    acquire_result = True
+
+    def __init__(self, name: str = "Whisperty") -> None:
+        self.name = name
+        self.watched = None
+        self.notified = 0
+        self.released = 0
+        _FakeGuard.instances.append(self)
+
+    def acquire(self) -> bool:
+        return _FakeGuard.acquire_result
+
+    def notify_existing(self) -> bool:
+        self.notified += 1
+        return True
+
+    def watch(self, callback) -> None:
+        self.watched = callback
+
+    def release(self) -> None:
+        self.released += 1
+
+
 def test_main_run_and_interrupt(tmp_path: Path) -> None:
     import whisperty.__main__ as m
 
@@ -60,15 +88,24 @@ def test_main_run_and_interrupt(tmp_path: Path) -> None:
         def quit(self):
             calls["quit"] += 1
 
-    saved_app, saved_setup = m.WhispertyApp, m.setup_logging
+        def on_second_instance(self):
+            pass
+
+    saved_app, saved_setup, saved_guard = m.WhispertyApp, m.setup_logging, m.SingleInstance
     m.WhispertyApp = FakeApp
     m.setup_logging = lambda cfg: calls.__setitem__("setup", calls["setup"] + 1)
+    m.SingleInstance = _FakeGuard
+    _FakeGuard.instances.clear()
+    _FakeGuard.acquire_result = True
     try:
         rc = m.main(["--config", str(tmp_path / "inexistant.yaml")])
         assert rc == 0 and calls["run"] == 1 and calls["setup"] == 1
         assert calls["quit"] == 0  # run() s'est terminé proprement
+        # La garde veille sur les lancements ultérieurs puis est libérée en sortie.
+        guard = _FakeGuard.instances[-1]
+        assert guard.watched is not None and guard.released == 1
 
-        # Ctrl-C pendant run() → quit() appelé, code 0.
+        # Ctrl-C pendant run() → quit() appelé, code 0, garde libérée.
         class InterruptApp(FakeApp):
             def run(self):
                 raise KeyboardInterrupt
@@ -76,9 +113,35 @@ def test_main_run_and_interrupt(tmp_path: Path) -> None:
         m.WhispertyApp = InterruptApp
         rc2 = m.main([])
         assert rc2 == 0 and calls["quit"] == 1
+        assert _FakeGuard.instances[-1].released == 1
     finally:
-        m.WhispertyApp, m.setup_logging = saved_app, saved_setup
+        m.WhispertyApp, m.setup_logging, m.SingleInstance = saved_app, saved_setup, saved_guard
     print("[extra 2] __main__.main : run normal + KeyboardInterrupt -> quit  OK")
+
+
+def test_main_second_instance(tmp_path: Path) -> None:
+    """Second lancement : signale l'instance existante et sort SANS construire l'app."""
+    import whisperty.__main__ as m
+
+    built = {"app": 0}
+
+    class NeverApp:
+        def __init__(self, config):
+            built["app"] += 1
+
+    saved_app, saved_guard = m.WhispertyApp, m.SingleInstance
+    m.WhispertyApp = NeverApp
+    m.SingleInstance = _FakeGuard
+    _FakeGuard.instances.clear()
+    _FakeGuard.acquire_result = False
+    try:
+        rc = m.main(["--config", str(tmp_path / "inexistant.yaml")])
+        assert rc == 0 and built["app"] == 0
+        assert _FakeGuard.instances[-1].notified == 1
+    finally:
+        _FakeGuard.acquire_result = True
+        m.WhispertyApp, m.SingleInstance = saved_app, saved_guard
+    print("[extra 2d] __main__.main : second lancement -> signal + sortie  OK")
 
 
 def test_version_module() -> None:
