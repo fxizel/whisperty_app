@@ -16,6 +16,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-08 Historique | ○ | ● | ○ | ○ | ● | |
 | UC-09 Live | | ○ | | | ● | |
 | UC-10 Réunion | | ● | ○ | | ● | |
+| UC-18 Diarisation locuteurs | | ● | ○ | | ● | |
 | UC-12 Configurer | ● | ○ | ○ | ○ | ○ | ● |
 | UC-13 Packaging/autostart | | | ○ | | | ● |
 | UC-14 Modèle initial | ○ | ○ | ○ | ○ | ○ | ● |
@@ -44,7 +45,8 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-08 Historique | FR-11 | RE-07, RE-10, US-02, SU-03, SU-08 |
 | UC-09 Live | FR-12, FR-16, FR-19, FR-20 | RE-08, RE-10, PE-03, PE-04, US-02, US-07, US-09, CO-05, CO-06, BR-06 |
 | UC-10 Réunion | FR-13, FR-16, FR-19, FR-20 | RE-08, RE-09, RE-10, PE-03, US-02, US-07, US-09, CO-04, CO-05, CO-06, CO-16, BR-05, BR-06 |
-| UC-12 Configurer | FR-17, FR-21 | US-02, US-05, SU-01, SU-08 |
+| UC-18 Diarisation locuteurs | FR-29, FR-30, FR-31, FR-32 | RE-13, RE-14, PE-07, US-11, US-12, CO-17, CO-18, CO-19, BR-08 |
+| UC-12 Configurer | FR-17, FR-21, FR-32 | US-02, US-05, SU-01, SU-08 |
 | UC-13 Packaging | FR-17 | SU-04, CO-08, CO-11 |
 | UC-14 Modèle initial | FR-18 | PE-02, CO-01, CO-02 |
 | UC-15 GPU | FR-03 | PE-01, CO-12 |
@@ -69,7 +71,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-10 | UC-07 |
 | FR-11 | UC-08 |
 | FR-12 | UC-09 |
-| FR-13 | UC-10 |
+| FR-13 | UC-10, UC-18 |
 | FR-15 | UC-03 |
 | FR-16 | UC-01, UC-09, UC-10 |
 | FR-17 | UC-12, UC-13 |
@@ -84,6 +86,10 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-26 | UC-16 |
 | FR-27 | UC-16 (exclusion documentée — Won't) |
 | FR-28 | UC-17 |
+| FR-29 | UC-18 |
+| FR-30 | UC-18 |
+| FR-31 | UC-18 |
+| FR-32 | UC-18, UC-12 |
 | US-01 | UC-01, UC-02 |
 | US-02 | UC-07, UC-08, UC-09, UC-10, UC-12 |
 | US-03 | UC-01 |
@@ -92,8 +98,10 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | US-06 | UC-02, UC-03 |
 | US-07 | UC-07, UC-09, UC-10 |
 | US-08 | UC-02 |
-| US-09 | UC-09, UC-10 |
+| US-09 | UC-09, UC-10, UC-18 |
 | US-10 | UC-16 |
+| US-11 | UC-18 |
+| US-12 | UC-18 |
 | RE-01 | UC-01 |
 | RE-02 | UC-01, UC-07 |
 | RE-03 | UC-03 |
@@ -106,12 +114,15 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | RE-10 | UC-08, UC-09, UC-10 |
 | RE-11 | UC-16 |
 | RE-12 | UC-17 |
+| RE-13 | UC-18 |
+| RE-14 | UC-18 |
 | PE-01 | UC-01, UC-15 |
 | PE-02 | UC-01, UC-14 |
 | PE-03 | UC-01, UC-09, UC-10 |
 | PE-04 | UC-03, UC-09 |
 | PE-05 | UC-01 |
 | PE-06 | UC-16 |
+| PE-07 | UC-18 |
 | SU-01 | UC-12 |
 | SU-02 | UC-04 |
 | SU-03 | UC-08 (+ transverse) |
@@ -123,7 +134,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-01 | UC-01, UC-06, UC-14, UC-16, UC-17 (+ transverse, cardinal) |
 | CO-02 | UC-14 |
 | CO-03 | UC-06, UC-17 |
-| CO-04 | UC-10 |
+| CO-04 | UC-10, UC-18 |
 | CO-05 | UC-09, UC-10 |
 | CO-06 | UC-09, UC-10 |
 | CO-07 | UC-07 |
@@ -135,7 +146,10 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-13 | UC-01 |
 | CO-14 | transverse (packaging/nommage) |
 | CO-15 | transverse (plateforme) |
-| CO-16 | UC-10 |
+| CO-16 | UC-10, UC-18 |
+| CO-17 | UC-18 (+ transverse, cardinal) |
+| CO-18 | UC-18 |
+| CO-19 | UC-18, UC-14 |
 | BR-01 | UC-01, UC-02, UC-16 (exclusivité, transverse aux modes) |
 | BR-02 | UC-01 |
 | BR-03 | UC-01, UC-04, UC-06 |
@@ -143,6 +157,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | BR-05 | UC-10 |
 | BR-06 | UC-07, UC-09, UC-10, UC-16, UC-17 |
 | BR-07 | UC-16 |
+| BR-08 | UC-18 |
 
 > **Conclusion** : aucune exigence orpheline — chaque exigence (FR/US/RE/PE/SU/CO) et chaque
 > règle de gestion (BR) sert ≥ 1 UC ou est explicitement **transverse**. Les exigences purement
@@ -175,7 +190,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | Q-03 | Le mode réunion doit-il afficher une **bannière de consentement** plus formelle (case à cocher) plutôt qu'une simple notification ? | P-02, P-05 |
 | Q-04 | Faut-il une **interface de configuration** (au-delà de l'édition YAML) pour les personas moins techniques (P-04) ? | P-04, P-06 |
 | Q-05 | Souhaite-t-on une **rétroaction sonore/visuelle** au déclenchement (bip, overlay) en plus de l'icône tray ? | P-04 |
-| Q-06 | La diarisation par modèle (locuteurs individuels) sera-t-elle proposée un jour en **option hors-ligne désactivée par défaut** ? | P-05, P-03 |
+| Q-06 | La diarisation par modèle (locuteurs individuels) sera-t-elle proposée un jour en **option hors-ligne désactivée par défaut** ? | P-05, P-03 | → **Oui** — tracé UC-18, CO-17…19, `speaker_diarization.enabled: false` par défaut. |
 | Q-07 | Doit-on cibler explicitement des **objectifs de latence chiffrés** (ex. < N s pour une phrase) par profil matériel ? | P-01, P-06 |
 | Q-08 | Faut-il un mécanisme de **mise à jour** de l'application compatible zéro-réseau (paquet hors-ligne signé) ? | P-06, P-03 |
 | Q-09 | La garde IA (`CO-03`) accepte un **hôte vide** (`""`) et `[::1]` en plus de localhost/127.0.0.1/::1 : faut-il **rejeter l'hôte vide** par rigueur (URL malformée), même s'il n'envoie rien hors machine ? | P-03 |
@@ -185,13 +200,13 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 
 | Catégorie | Nb exigences | Couverture personas |
 |-----------|:------------:|---------------------|
-| Functionality (FR) | 27 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
-| Usability (US) | 10 | P-01, P-04 (priorité), tous |
-| Reliability (RE) | 12 | P-04, P-02 (priorité), tous |
-| Performance (PE) | 6 | P-01, P-05, P-06 |
+| Functionality (FR) | 31 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
+| Usability (US) | 12 | P-01, P-04 (priorité), tous |
+| Reliability (RE) | 14 | P-04, P-02 (priorité), tous |
+| Performance (PE) | 7 | P-01, P-05, P-06 |
 | Supportability (SU) | 8 | P-06 (priorité), mainteneurs |
-| Contraintes (CO) | 16 | P-03 (priorité), tous |
-| Règles de gestion (BR) | 7 | transverse |
+| Contraintes (CO) | 19 | P-03 (priorité), tous |
+| Règles de gestion (BR) | 8 | transverse |
 
 ---
 
