@@ -46,6 +46,55 @@ winget install --id JRSoftware.InnoSetup -e
 Le script localise `ISCC.exe` puis compile `installer\whisperty.iss` →
 `dist\installer\Whisperty-Setup-<version>.exe`.
 
+### Signature de code (supprimer l'avertissement SmartScreen)
+
+L'écran bleu **« Windows a protégé votre PC »** (Microsoft Defender SmartScreen)
+apparaît parce que l'installeur n'est **pas signé** avec un certificat Authenticode
+reconnu. Il n'existe **aucun contournement logiciel** : il faut signer l'exe avec un
+certificat émis par une autorité de certification de confiance.
+
+| Type de certificat | SmartScreen au lancement | Coût indicatif |
+|--------------------|--------------------------|----------------|
+| **EV** (Extended Validation, clé sur token USB) | Confiance immédiate en général | ~400–700 €/an |
+| **OV** (Organization Validation) | Réputation à construire (téléchargements) | ~200–400 €/an |
+| Auto-signé / absent | Avertissement systématique | — |
+
+Fournisseurs courants : DigiCert, Sectigo, SSL.com. Pour un projet open source,
+[SignPath Foundation](https://signpath.org/) propose des certificats gratuits.
+
+**Une fois le certificat obtenu** (fichier `.pfx` ou installé dans le magasin Windows) :
+
+```powershell
+# Variables de session (ne pas committer le .pfx ni le mot de passe)
+$env:WHISPERTY_SIGN_PFX = "C:\chemin\softcom-codesign.pfx"
+$env:WHISPERTY_SIGN_PASSWORD = "votre-mot-de-passe"
+
+# Build + installeur signés
+.\scripts\build.ps1 -Sign
+.\scripts\make_installer.ps1 -Sign
+```
+
+Alternative avec certificat déjà dans le magasin Windows (empreinte SHA1) :
+
+```powershell
+$env:WHISPERTY_SIGN_THUMBPRINT = "ABCD1234…"
+.\scripts\build.ps1 -Sign
+.\scripts\make_installer.ps1 -Sign
+```
+
+Prérequis machine de build : **signtool.exe** (Windows SDK — composant « Signing Tools
+for Desktop Apps », ou Visual Studio Build Tools).
+
+Vérification après build :
+
+```powershell
+Get-AuthenticodeSignature .\dist\installer\Whisperty-Setup-*.exe
+```
+
+> L'éditeur affiché dans SmartScreen correspond au **sujet du certificat** (ex. « Softcom »).
+> Il doit être cohérent avec `AppPublisher` dans `whisperty.iss` et `CompanyName` dans
+> `scripts/gen_version_info.py`.
+
 ## Ce que fait l'installeur (`whisperty.iss`)
 
 - **Installation par utilisateur** dans `%LocalAppData%\Programs\Whisperty` (sans admin).

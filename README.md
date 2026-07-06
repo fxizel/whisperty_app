@@ -174,6 +174,10 @@ Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Win
 ```powershell
 .\scripts\build.ps1            # dist\whisperty\ : exe + modèle Whisper bundlé
 .\scripts\make_installer.ps1   # dist\installer\Whisperty-Setup-<version>.exe (Inno Setup)
+
+# Distribution publique : signer pour éviter l'avertissement SmartScreen (certificat requis)
+.\scripts\build.ps1 -Sign
+.\scripts\make_installer.ps1 -Sign
 ```
 
 L'installeur s'installe **par utilisateur** (`%LocalAppData%\Programs\Whisperty`, sans droits
@@ -181,6 +185,9 @@ admin), crée les raccourcis, propose le démarrage avec Windows, ferme propreme
 en cours lors d'une mise à jour et préserve config/historique. Si WebView2 manque, il propose
 d'ouvrir la page de téléchargement. Variantes build : `-Model small` · `-NoModel` (l'app
 proposera alors le téléchargement du modèle au premier lancement).
+
+> **SmartScreen** (« Windows a protégé votre PC ») : l'installeur doit être signé avec un
+> certificat Authenticode (OV/EV). Voir [`installer/README.md`](installer/README.md) § Signature.
 
 > Procédure détaillée : **[`installer/README.md`](installer/README.md)**.
 
