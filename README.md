@@ -51,12 +51,14 @@ flowchart LR
 - 🎙️ Raccourci global configurable : `toggle`, push-to-talk ou double-appui.
 - 🧠 Transcription Whisper locale, **modèle configurable** (base / small / medium / large-v3), CPU ou CUDA.
 - ⌨️ **Injection system-wide** dans l'app active (Ctrl+V robuste pour les accents, frappe en repli).
-- 📖 **Dictionnaire personnalisé** : termes métier favorisés + corrections automatiques.
+- 📖 **Dictionnaire personnalisé** : termes métier favorisés + corrections automatiques —
+  géré depuis la fenêtre (appliqué à chaud) ou par simple fichier texte.
 - 🔔 Icône tray colorée selon l'état (gris / rouge / orange / bleu / vert).
 
 **Interface & historique**
 - 🖥️ **Fenêtre WebView2** — dashboard (statut live, dernière transcription, statistiques du jour),
-  configuration visuelle et historique navigable (recherche, filtres, copie/suppression).
+  configuration visuelle, gestion du dictionnaire (termes & corrections) et historique navigable
+  (recherche, filtres, copie/suppression).
   La croix réduit dans la zone de notification ; fermeture définitive via « Quitter ».
 - 📜 **Historique SQLite local** — purge automatique, « Copier la dernière transcription » depuis le tray.
 - 📂 **Import de fichiers audio** (WAV / MP3 / M4A / FLAC…) — transcrit, copié et archivé, sans ffmpeg.
@@ -140,12 +142,18 @@ la plupart des changements à chaud.
 
 ## Dictionnaire personnalisé
 
-Éditez **`dictionary.txt`**, une entrée par ligne :
+L'écran **Dictionnaire** de la fenêtre liste, ajoute, modifie et supprime les entrées ;
+l'enregistrement est appliqué **à chaud** (la dictée suivante en bénéficie, sans redémarrage).
+Le fichier **`dictionary.txt`** reste la source de vérité et peut toujours s'éditer à la main
+(l'éditeur intégré préserve vos commentaires et l'ordre des entrées), une entrée par ligne :
 
 ```
 terme                 # mot favorisé par la reconnaissance (hotword)
 mauvais => correct    # correction appliquée après transcription
 ```
+
+> En mode zone de notification seule, « Ouvrir le dictionnaire » ouvre le fichier dans
+> l'éditeur système.
 
 ## Tests
 
@@ -211,7 +219,7 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `injector.py` | Injection texte (Ctrl+V par défaut, frappe en repli) |
 | `tray.py` | Icône zone de notification (pystray) |
 | `app.py` | Orchestration / machine à états + raccourci global + surveillance VAD |
-| `config.py` · `dictionary.py` | Chargement de `config.yaml` / du dictionnaire |
+| `config.py` · `dictionary.py` | Chargement de `config.yaml` / du dictionnaire (édition assistée depuis la fenêtre, commentaires préservés) |
 | `history.py` | Historique des transcriptions (SQLite local, thread-safe) |
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost) |
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |

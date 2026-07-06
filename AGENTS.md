@@ -47,17 +47,20 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `tray.py` | Icône zone de notification (pystray) | fait |
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |
-| `dictionary.py` | Chargement dictionnaire + corrections | fait |
+| `dictionary.py` | Chargement dictionnaire + corrections + édition assistée UC-19 (`parse_entries`/`update_dictionary_file`, préserve commentaires/ordre) | fait |
 | `history.py` | Historique des transcriptions (SQLite local, thread-safe) | fait (V2) |
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost, désactivé par défaut) | fait (V2) |
 | `profiles.py` | Profils de contexte par application (override prompt/langue/dico) | fait (V2) |
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
 | `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
-| `conference.py` | Mode réunion : micro + sortie système simultanés, mixés (itération 1) | fait (V2) |
-| `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
+| `conference.py` | Mode réunion : micro + sortie système simultanés (mixage itér. 1 / distinction source itér. 2 / diarisation locuteur itér. 3, UC-18) | fait (V2) |
+| `diarization.py` | Diarisation des locuteurs (UC-18) : empreinte MFCC **pur NumPy** + clustering en ligne, 100 % local, zéro modèle/réseau | fait (V2) |
 | `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
 | `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
+| `modeldl.py` | Téléchargement **opt-in** du modèle Whisper depuis l'UI (bannière dashboard ; doctrine de `cuda.py`) | fait (V2) |
+| `singleinstance.py` | Instance unique (mutex + évènement nommés Win32) : relancer l'exe réaffiche la fenêtre ; no-op hors Windows | fait (V2) |
+| `version.py` | Numéro de version unique (fenêtre, exe, installeur) | fait (V2) |
 | `web/` | Assets de l'UI (`index.html`, `styles.css`, `app.js`) — rendu fidèle de la maquette, **police système** (pas de Google Fonts) | fait (V2) |
 
 ## Concurrence (à préserver)
@@ -83,12 +86,27 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   pendant le traitement. Arrêt : la sentinelle `None` est mise en file APRÈS le dernier segment ;
   `_consume` joint le worker avant de rendre la main (donc avant `_close_transcript`/`_finish`), si
   bien que `_segments`/`_file` ne sont touchés que par le worker (lus par `_finish` après le join).
-  La file est non bornée (latence en cas de retard, jamais de coupure). `meeting.py` hérite de ce
-  correctif (il s'appuie sur `LiveTranscriber`). NB : `conference.py` n'a jamais eu ce défaut — ses
-  sources capturent dans des threads séparés vers des tampons mémoire non bornés (`_StreamBuffer`).
-- **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
-  l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
-  suspect, sans bloquer la capture loopback.
+  La file est non bornée (latence en cas de retard, jamais de coupure). NB : `conference.py` n'a
+  jamais eu ce défaut — ses sources capturent dans des threads séparés vers des tampons mémoire non
+  bornés (`_StreamBuffer`).
+- **Réunion (V2)** : mêmes règles que live — `stop_conference()` ne tient pas `_lock` et ne
+  joint pas les threads de capture ; c'est le callback de fin (`_on_conference_finished`) qui
+  reprend `_lock` et repasse à IDLE.
+- **Notes en session (V2, UC-16)** : `LiveTranscriber._note_lock` et
+  `ConferenceTranscriber._note_lock` sont des **verrous feuilles** (jamais imbriqués avec un
+  autre verrou) protégeant `_segments`/`_notes`/`_file` — les notes arrivent du pont GUI
+  (`GuiApi.add_note`) ou du raccourci signet, PAS du worker. `WhispertyApp.add_note` lit
+  l'état sous `_lock`, puis appelle `add_note` du transcriber **hors** verrou. JAMAIS de
+  traitement de note dans les threads de capture (RE-11) ; l'affichage passe par le flux
+  existant (`_append_live_line` → `_live_rev`), pas de payload ajouté au polling.
+- **Notices utilisateur (V2)** : `WhispertyApp._notify_user` publie {rev, text, kind} sous
+  `_notice_lock` — **verrou feuille**, même modèle que `_live_lock` (jamais imbriqué ; les
+  appelants le prennent hors de `_lock` ou après l'avoir relâché). Le JS ne récupère
+  `get_notice` que quand `poll().noticeRev` change (polling, payload minimal — pas de push).
+  Toute erreur qui change le comportement PERÇU (micro, modèle, échec de dictée/import) DOIT
+  passer par `_notify_user` (toast + notification tray), pas seulement par les logs.
+  `_model_error` (même verrou) mémorise le dernier échec de chargement du modèle et pilote la
+  bannière de téléchargement du dashboard (`poll().modelOk`).
 - **Interface fenêtre (V2)** : `webview.start()` exige le **thread principal** ; le tray tourne
   donc **détaché** (`Tray.run_detached()`) et `launch_gui()` bloque le thread principal. Les
   méthodes de `GuiApi` (pont) et les actions tray s'exécutent sur d'AUTRES threads et délèguent à
@@ -119,9 +137,33 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   modèle), jamais silencieux, indisponible en exe figé (`can_install`=false, pas de pip).
 - **Confidentialité** : `local_files_only` est **true par défaut** (zéro réseau) ; en mode
   hors-ligne, `transcriber.load()` pose aussi `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`.
+- **Modèle manquant → téléchargement guidé (V2, `modeldl.py`)** : si le chargement échoue
+  (`ModelNotAvailableError`), la bannière du dashboard propose le téléchargement **opt-in**
+  (même doctrine que `cuda.py` : jamais silencieux, progression par polling `model_status`,
+  fonctionne AUSSI en exe figé — huggingface_hub est embarqué). Le modèle est matérialisé dans
+  `models/faster-whisper-<taille>` à côté de la config, puis `config.yaml` est pointé dessus
+  avec `local_files_only: true` (`_on_model_downloaded`). ⚠️ **Contrat taille↔chemin** : l'UI
+  raisonne en TAILLES (`medium`) alors que la config peut contenir un chemin bundlé — la
+  normalisation (`modeldl.model_size_name`) doit rester appliquée aux 3 endroits :
+  `get_dashboard`, `get_config` et `apply_config_from_gui` (qui compare les tailles et
+  privilégie un dossier local existant, sinon enregistrer sans changer de taille écraserait un
+  modèle bundlé fonctionnel).
+- **Instance unique (V2, `singleinstance.py`)** : mutex nommé `Local\Whisperty.SingleInstance`
+  (par session, cohérent avec l'installation par utilisateur) + évènement « montre-toi » que le
+  second lancement déclenche avant de sortir (`__main__` → `on_second_instance` → fenêtre
+  réaffichée, ou notification en mode tray seul). Règle : la garde ne doit JAMAIS empêcher un
+  lancement (échec d'API Win32 = démarrage normal) ; no-op hors Windows. Les tests utilisent des
+  noms d'objets uniques (pas de collision avec une instance réelle) et une doublure kernel32
+  (`_k32_cached`) pour couvrir les chemins Windows sur la CI Linux.
 - **IA locale (V2)** : `ai.py` n'autorise QUE des endpoints locaux (`ai.is_local_endpoint` :
   localhost/127.0.0.1/::1) et est **désactivé par défaut**. Tout endpoint distant est refusé —
   le texte dicté ne doit jamais sortir de la machine. Échec LLM = texte brut conservé (jamais bloquant).
+  Le **résumé de fin de session** (UC-17, `summary:`) réutilise le MÊME LLM local
+  (`LocalLLM.summarize`, opt-in **indépendant** de `ai.enabled`, garde identique dans `_chat`) :
+  lancé par `WhispertyApp._maybe_summarize` dans un thread worker **APRÈS** le retour IDLE
+  (jamais sous `_lock`, ne bloque ni la machine à états ni une nouvelle dictée), il complète le
+  transcript (`# Résumé`), historise (`source="résumé live/réunion"`) et notifie ; échec = session
+  déjà archivée, rien n'est perdu. Entrée tronquée début+fin au-delà de `summary.max_chars`.
 - **Historique (V2)** : `history.py` = SQLite local (`sqlite3` stdlib), connexion partagée
   `check_same_thread=False` mais **tous les accès passent par `History._lock`** ; écriture non bloquante.
 - **Profils (V2)** : surcharge `initial_prompt`/langue/dictionnaire selon l'app active, capturée
@@ -152,8 +194,31 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   par position audio (échantillons poussés), puis les segments sont **entrelacés chronologiquement**
   (tri à l'arrêt + réécriture triée du transcript) : `[MM:SS] Moi : …` / `[MM:SS] Interlocuteurs : …`.
   Distinction PAR SOURCE uniquement (micro = `mic_label`, sortie = `system_label`) — déterministe,
-  100 % local. La diarisation des interlocuteurs individuels (pyannote = PyTorch + modèles *gated* HF)
-  est **écartée** (tension zéro-réseau) ; à n'envisager qu'en option hors-ligne désactivée par défaut.
+  100 % local.
+- **Réunion — diarisation par locuteur (V2, itération 3, UC-18, `diarization.py`)** :
+  `conference.speaker_diarization.enabled: true` (**opt-in**, défaut `false`) **étend** la distinction
+  par source — au lieu de `Moi`/`Interlocuteurs`, chaque segment porte une étiquette de **voix**
+  (`Locuteur 1`, `Locuteur 2`, …). ⚠️ **Doctrine zéro-réseau, zéro dépendance** : la diarisation intégrée
+  est une **empreinte MFCC calculée en pur NumPy** (statistiques MFCC par segment, L2-normalisées) +
+  **clustering en ligne** (similarité cosinus) — PAS `pyannote` (PyTorch + modèles *gated* HF, en tension
+  avec la contrainte cardinale). **Rien à télécharger** = garantie zéro-fuite maximale (CO-17) ; c'est un
+  compromis précision/simplicité assumé (sépare des voix nettement différentes), l'embedder restant
+  **enfichable** (`Diarizer(embed_fn=…)`) pour un futur backend ONNX hors-ligne. Exige le mode distinction
+  (pas de mixage) ; sinon `_make_diarizer()` renvoie `None` (repli). `SpeakerRegistry` : clustering **par
+  source** (plafond `max_speakers` par source, FR-32) mais **numérotation GLOBALE** (ordre de première
+  apparition, l'étiquette ne révèle que la voix, pas la source). ⚠️ **Worker dédié (RE-14)** : la
+  transcription reste dans le fil `_consume_distinct` ; l'empreinte+clustering tournent dans `_diar_loop`
+  (thread séparé drainant `_diar_queue`), joint par **sentinelle `None`** APRÈS le dernier segment et AVANT
+  `_close_transcript`/`_finish` (comme la file live) → `_segments` complet au tri final. ⚠️ **Stockage par
+  CLÉ, pas par libellé** : `_segments` retient `(start, key, text)` où `key` = `spk:N` (diarisé) / étiquette
+  de source (repli) / `Note` ; `_label_for(key)` résout le libellé **au rendu** (flux, export trié,
+  historique) → le **renommage est rétroactif** (FR-31 : `rename_speaker` met à jour le registre, `app`
+  réémet le flux via `render_lines()`, l'export/historique se rendent depuis les mêmes clés à l'arrêt).
+  **Repli gracieux (BR-08/RE-13)** : segment trop court/silencieux/erreur → étiquette de source, jamais
+  d'omission ni d'arrêt. `SpeakerRegistry` est un **verrou feuille** (`assign` depuis `_diar_loop`,
+  `rename`/`speakers` depuis le pont GUI). Ancienne note : la diarisation par modèle neuronal (pyannote)
+  reste **écartée** ; l'empreinte NumPy la remplace comme backend par défaut, une option ONNX hors-ligne
+  restant envisageable (désactivée par défaut).
 - **Interface fenêtre (V2, `gui.py` + `web/`)** : la maquette HTML est rendue par **Edge WebView2**
   via `pywebview` (préinstallé sur Win10/11). `pywebview` est une **dépendance optionnelle** : absente
   (ou WebView2 indisponible), l'app retombe sur le **mode tray seul** historique (`gui.enabled: false`
@@ -191,6 +256,15 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   (les sous-systèmes partagent ces objets), réécrit le fichier, puis applique à chaud : reset du modèle
   (taille/device/`local_files_only`), `reload_hotkey()`, reconstruction injecteur/LLM. La **langue** est
   lue à chaque transcription → pas de rechargement de modèle.
+- **Dictionnaire — édition assistée (V2, UC-19, `dictionary.py`)** : l'écran « Dictionnaire » de la
+  fenêtre liste/édite les entrées (`GuiApi.get_dictionary`/`save_dictionary` →
+  `apply_dictionary_from_gui`). Écriture via `update_dictionary_file` (ligne par ligne, préserve
+  commentaires/ordre — même doctrine que `configio`, sans ruamel) ; entrées invalides ignorées,
+  doublons dédupliqués. Puis **rechargement à chaud** (`transcriber.set_dictionary` +
+  `profiles.reload_dictionary`) — aucune relance, aucun rechargement de modèle. Échec d'écriture =
+  fichier intact + notification (`_notify_user`). Repli mode tray seul : « Ouvrir le dictionnaire »
+  (`open_dictionary`, crée le fichier avec en-tête d'aide si absent). L'édition reste possible même
+  si `dictionary.enabled: false` (le fichier est écrit ; l'effet attend l'activation).
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.
@@ -212,11 +286,19 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   (le CWD n'est pas fiable au démarrage auto / figé) ; un nom de taille reste passé tel quel. Variante
   `build.ps1 -NoModel` → `local_files_only: false` (le modèle, et la vérif de révision HF, passent par le
   réseau au 1er usage) — d'où le bundling comme défaut conforme à la contrainte cardinale.
+- **Défauts d'expédition (build.ps1)** : le `config.yaml` du dépôt reflète le POSTE DE DEV (CUDA,
+  LLM local actif). `build.ps1` patche la copie expédiée vers des défauts neutres :
+  `device: cpu`/`int8`, `ai.enabled: false`, `summary.enabled: false` (un poste vierge n'a ni
+  composants CUDA ni serveur LLM — sinon avertissements et échecs journalisés à chaque usage).
+  NE PAS « corriger » le config.yaml du dépôt pour l'expédition : c'est le rôle de ce patch.
 - **Installeur (`installer/whisperty.iss`, Inno Setup)** : installation **par utilisateur** dans
   `%LocalAppData%\Programs\Whisperty` (sans admin) — INDISPENSABLE car l'app écrit `config.yaml` (édité via
   l'UI), `whisperty.db`, `logs\`, `transcriptions\` À CÔTÉ de l'exe (échouerait sous `Program Files`).
   Autostart = clé `HKCU\…\Run` (cohérent avec `scripts\install_autostart.ps1`). `config.yaml`/`dictionary.txt`
-  posés en `onlyifdoesntexist` (MAJ préserve les réglages). WebView2 vérifié, non bloquant.
+  posés en `onlyifdoesntexist` (MAJ préserve les réglages). WebView2 vérifié, non bloquant : s'il manque, un
+  dialogue propose d'OUVRIR la page de téléchargement. MAJ/désinstallation : `KillRunningApp` (taskkill dans
+  `PrepareToInstall`/`CurUninstallStepChanged`) — la fermeture « douce » Restart Manager ne quitte PAS une
+  app de tray (sa fenêtre intercepte la fermeture pour se masquer), les fichiers resteraient verrouillés.
 
 ## Conventions
 

@@ -19,12 +19,12 @@
 | Épic | Thème | Priorité | Stories |
 |------|-------|----------|---------|
 | EPIC-1 | Dictée vocale de base | Must | ST-1.1 → ST-1.8 |
-| EPIC-2 | Post-traitement & personnalisation | Should | ST-2.1 → ST-2.3 |
+| EPIC-2 | Post-traitement & personnalisation | Should | ST-2.1 → ST-2.4 |
 | EPIC-3 | Modes avancés de transcription | Should / Could | ST-3.1 → ST-3.6 |
 | EPIC-4 | Configuration & déploiement | Must / Could | ST-4.1 → ST-4.6 |
 | EPIC-5 | Confidentialité, robustesse & qualité | Must | ST-5.1 → ST-5.6 |
 
-**Total : 5 épics · 29 user stories.**
+**Total : 5 épics · 30 user stories.**
 
 ---
 
@@ -156,6 +156,16 @@ texte plus propre sans relecture systématique — tout en gardant mes données 
 - Si le LLM local n'est pas disponible ou échoue, ma dictée est conservée telle quelle, sans blocage.
 - Cette fonction est désactivée par défaut et doit être activée explicitement.
 - **Priorité : Should** · **Parent : EPIC-2**
+
+### ST-2.4 — Gérer mon vocabulaire depuis la fenêtre de l'application
+**En tant qu'**utilisateur peu technique, **je veux** ajouter, modifier et supprimer mes termes
+et corrections depuis la fenêtre de l'application, **afin de** faire vivre mon vocabulaire sans
+éditer de fichier à la main.
+- Je peux consulter la liste de mes termes favorisés et de mes corrections dans une vue dédiée.
+- Je peux ajouter, modifier ou supprimer une entrée ; l'enregistrement est confirmé et pris en compte à la dictée suivante, sans redémarrage.
+- Mon fichier de vocabulaire reste lisible et modifiable à la main : mes commentaires et l'ordre de mes entrées sont préservés.
+- Si l'enregistrement échoue (fichier verrouillé, droits insuffisants), rien n'est perdu et je suis prévenu.
+- **Priorité : Should** · **Parent : EPIC-2** · Réf. UC-19
 
 ---
 

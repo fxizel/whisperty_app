@@ -283,6 +283,8 @@ journalisé), jamais mis en file.
 **Fonctions**
 - « **Copier la dernière transcription** » → presse-papiers.
 - « **Ouvrir le dossier de l'historique** » → explorateur sur le dossier de `whisperty.db`.
+- Écran **Historique** de la fenêtre (si ouverte) : liste navigable des transcriptions
+  (recherche, filtres par source, copie, suppression).
 
 **Mécanisme** : base **SQLite locale** (`whisperty.db`), purge automatique au-delà de
 `history.max_entries` (défaut 200), accès sérialisés (thread-safe), écriture non bloquante.
@@ -354,12 +356,16 @@ en une transcription continue sans étiquette de locuteur.
 | **Acteur principal** | Utilisateur / Administrateur |
 | **Objectif** | Régler le comportement via un fichier unique. |
 
-**Scénario**
-1. Tray → « Ouvrir la configuration » ouvre `config.yaml`.
-2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference — dont `speaker_diarization` pour UC-18).
+**Scénario nominal (écran Configuration de la fenêtre)**
+1. Fenêtre → écran « Configuration » : les réglages courants sont présentés par sections (audio, modèle, raccourci, injection, IA locale, résumé, GPU…).
+2. À l'enregistrement, `config.yaml` est réécrit en **préservant commentaires et ordre** (`configio.py`), puis la plupart des réglages sont appliqués **à chaud** : modèle rechargé si taille/device/`local_files_only` changent, raccourci ré-enregistré, injecteur/LLM reconstruits (la langue est lue à chaque transcription).
+
+**Variante (édition directe / mode tray seul)**
+1. Tray → « Ouvrir la configuration » ouvre `config.yaml` dans l'éditeur système.
+2. L'utilisateur édite les sections (audio, transcription, hotkey, output, dictionary, history, ai, profiles, live, conference — dont `speaker_diarization` pour UC-18 —, notes, summary, gui).
 3. **Relance** de l'application pour prise en compte.
 
-**Règle** : un seul fichier `config.yaml` abondamment commenté fait foi ; le dictionnaire est dans `dictionary.txt`.
+**Règle** : un seul fichier `config.yaml` abondamment commenté fait foi ; le dictionnaire est dans `dictionary.txt` (géré par UC-19).
 **Exigences liées** : FR-17, SU-01, US-05.
 
 ---
@@ -372,9 +378,9 @@ en une transcription continue sans étiquette de locuteur.
 | **Objectif** | Produire un exécutable autonome et lancer Whisperty au démarrage de Windows. |
 
 **Scénario**
-1. `pyinstaller whisperty.spec` → `dist\whisperty.exe` (onefile, `upx=False`).
-2. Copier `config.yaml` et `dictionary.txt` **à côté** de l'exe (non embarqués, éditables).
-3. `scripts\install_autostart.ps1` (par utilisateur, sans droits admin) ; désinstallation par le script inverse.
+1. `scripts\build.ps1` → `dist\whisperty\` (PyInstaller **onedir**, `upx=False`) : modèle Whisper **bundlé** par défaut (`-NoModel` pour un build léger) et copie de `config.yaml` patchée vers des défauts neutres (CPU/`int8`, IA et résumé désactivés, `local_files_only: true`) ; `config.yaml`/`dictionary.txt` restent **à côté** de l'exe (non embarqués, éditables).
+2. `scripts\make_installer.ps1` (Inno Setup) → `dist\installer\Whisperty-Setup-<version>.exe` : installation **par utilisateur** dans `%LocalAppData%\Programs\Whisperty` (sans droits admin), réglages et historique préservés en mise à jour, démarrage avec Windows optionnel (clé `HKCU\…\Run`), vérification WebView2 non bloquante.
+3. Sans installeur (build de dev) : `scripts\install_autostart.ps1` active le démarrage automatique ; désinstallation par le script inverse.
 
 **Exigences liées** : FR-17, SU-04, CO-08 (config non embarqué), CO-11 (`upx=False`).
 
@@ -387,9 +393,14 @@ en une transcription continue sans étiquette de locuteur.
 | **Acteur principal** | Utilisateur / Administrateur |
 | **Objectif** | Mettre en cache le modèle Whisper, **unique** opération réseau tolérée. |
 
-**Scénario**
-1. Récupérer le modèle (`python -c "from faster_whisper import WhisperModel; WhisperModel('medium')"` — adaptez `'medium'` au `model` de votre `config.yaml`) **ou** passer ponctuellement `local_files_only: false`, lancer une fois, puis remettre `true`.
-2. Ensuite, fonctionnement 100 % hors-ligne : `local_files_only` est passé inconditionnellement à `WhisperModel` ; `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` sont posés par défaut (`setdefault`).
+**Scénario nominal (téléchargement guidé, `modeldl.py`)**
+1. Au premier lancement sans modèle, le tableau de bord affiche une **bannière** « Télécharger » (poids annoncé) ; un clic déclenche le téléchargement **opt-in** (progression suivie par polling, jamais silencieux), y compris en exe figé.
+2. Le modèle est matérialisé dans `models/faster-whisper-<taille>` à côté de la configuration, qui est pointée dessus avec `local_files_only: true` → retour au fonctionnement 100 % hors-ligne : `local_files_only` est passé inconditionnellement à `WhisperModel` ; `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` sont posés par défaut (`setdefault`).
+
+**Variantes (pré-stage / manuel / déploiement)**
+- `python scripts\fetch_model.py --model medium` : copie le modèle depuis le cache Hugging Face s'il est présent, sinon le télécharge une fois (préparation d'un poste en avance de phase).
+- Passer ponctuellement `local_files_only: false`, lancer une fois, puis remettre `true`.
+- En déploiement, `build.ps1` **bundle** le modèle par défaut dans le build : aucun réseau sur la machine cible (cf. UC-13).
 
 **Exigences liées** : CO-01, CO-02, PE-02 (préchargement).
 
@@ -402,9 +413,13 @@ en une transcription continue sans étiquette de locuteur.
 | **Acteur principal** | Administrateur |
 | **Objectif** | Accélérer la transcription sur GPU NVIDIA. |
 
-**Scénario**
-1. `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`.
-2. `config.yaml` : `device: cuda`, `compute_type: float16`.
+**Scénario nominal (depuis la fenêtre)**
+1. Écran Configuration → `device: cuda`, puis « **Installer le support GPU** » : installation **opt-in** des composants cuBLAS/cuDNN (~1,3 Go, progression suivie — seul appel réseau, doctrine identique à UC-14) ; indisponible en exe figé (message explicite, pas de pip embarqué).
+2. `compute_type: float16` recommandé.
+
+**Variante (manuelle, build de dev)** : `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`, puis `config.yaml` : `device: cuda`, `compute_type: float16`.
+
+**Exceptions** : CUDA demandé mais GPU ou composants absents → **repli gracieux CPU `int8`** (aucun plantage à la première dictée ; `cfg.device` inchangé).
 
 **Contrainte** : CPU et CUDA uniquement — **pas** de DirectML (AMD/Intel restent en CPU `int8`).
 **Exigences liées** : FR-03, PE-01, CO-12.

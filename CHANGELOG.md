@@ -25,6 +25,13 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
   - **Opt-in** (`conference.speaker_diarization.enabled`, désactivé par défaut) et sans
     risque : toute voix trop courte, silencieuse ou ambiguë retombe sur l'étiquette de
     source — la réunion ne s'arrête jamais à cause de la diarisation.
+- **Gestion du dictionnaire personnalisé depuis la fenêtre (UC-19)** — un nouvel écran
+  « Dictionnaire » liste, ajoute, modifie et supprime les termes favorisés (hotwords) et
+  les corrections (`mauvais => correct`) sans éditer le fichier à la main. L'enregistrement
+  réécrit `dictionary.txt` en **préservant commentaires et ordre**, puis recharge le
+  dictionnaire **à chaud** : la dictée suivante en bénéficie sans redémarrage. En mode zone
+  de notification seule, une entrée « Ouvrir le dictionnaire » ouvre le fichier dans
+  l'éditeur système (créé avec un en-tête d'aide s'il n'existe pas).
 
 ## [0.2.0] — 2026-07-03
 

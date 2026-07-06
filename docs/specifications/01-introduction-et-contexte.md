@@ -14,8 +14,12 @@ Whisperty est une application **de bureau Windows 10/11** offrant :
 
 - la **dictée vocale** transcrite localement et injectée dans l'application active ;
 - des fonctions connexes de transcription (import de fichiers, capture d'une sortie audio en
-  direct, mode réunion) et de productivité (historique, profils de contexte, raffinage IA
-  local).
+  direct, mode réunion avec distinction par source et — en option — diarisation des locuteurs)
+  et de productivité (historique, profils de contexte, raffinage IA local, notes et résumé de
+  session, gestion du dictionnaire) ;
+- une **fenêtre optionnelle** (WebView2) en complément de l'icône de zone de notification :
+  tableau de bord avec flux en direct, configuration, dictionnaire et historique — l'application
+  reste pleinement utilisable en mode tray seul.
 
 L'ensemble fonctionne **sans aucun envoi de données hors de la machine** (cf. §5).
 
@@ -24,9 +28,10 @@ L'ensemble fonctionne **sans aucun envoi de données hors de la machine** (cf. �
 - Toute plateforme non-Windows (macOS, Linux, mobile, web) — *Won't*.
 - Tout service cloud, compte utilisateur, synchronisation ou télémétrie — *interdit par
   conception* (cf. contrainte cardinale).
-- La diarisation par modèle (identification de locuteurs individuels via pyannote) — écartée
-  pour cause de tension avec le zéro-réseau (modèles *gated*) ; au mieux une option future
-  hors-ligne désactivée par défaut.
+- La diarisation par modèle **neuronal** (pyannote : PyTorch + modèles *gated* Hugging Face) —
+  écartée pour cause de tension avec le zéro-réseau. La diarisation des locuteurs est couverte
+  **sans modèle ni téléchargement** par une empreinte locale pur NumPy (UC-18, opt-in) ; un
+  backend ONNX hors-ligne optionnel, désactivé par défaut, reste envisageable.
 - L'accélération GPU sur AMD/Intel (DirectML) — non supportée par le moteur (CTranslate2).
 
 ## 3. Glossaire
@@ -44,7 +49,8 @@ L'ensemble fonctionne **sans aucun envoi de données hors de la machine** (cf. �
 | **LLM local** | Modèle de langage servi sur la machine (Ollama, LM Studio…) via un endpoint compatible OpenAI, **localhost uniquement**. |
 | **Tray** | Icône de la zone de notification Windows, point d'entrée des actions et indicateur d'état. |
 | **Mode exclusif** | Mode (live, réunion) qui monopolise l'application : aucune autre opération concurrente. |
-| **Itération 1 / 2 (réunion)** | Mixage des sources en une voix (it. 1) *vs* distinction par source entrelacée chronologiquement (it. 2). |
+| **Itération 1 / 2 / 3 (réunion)** | Mixage des sources en une voix (it. 1) *vs* distinction par source entrelacée chronologiquement (it. 2) *vs* diarisation des voix individuelles, opt-in (it. 3, UC-18). |
+| **Diarisation** | Attribution de chaque segment à une voix (« Locuteur N ») par empreinte vocale calculée localement (statistiques MFCC en pur NumPy + clustering en ligne), sans modèle à télécharger. |
 
 ## 4. Vision & proposition de valeur
 

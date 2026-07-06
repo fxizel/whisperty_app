@@ -33,7 +33,7 @@ décisionnels. Chaque persona porte un préfixe `P-xx` réutilisé dans la matri
 - Réécrire les accents et la ponctuation à la main est chronophage.
 
 **Fonctionnalités clés** : dictée par raccourci (UC-01), profils de contexte (UC-05),
-dictionnaire de hotwords (UC-04), raffinage IA local (UC-06).
+dictionnaire de hotwords (UC-04, géré via UC-19), raffinage IA local (UC-06).
 
 ---
 
@@ -55,7 +55,8 @@ dictionnaire de hotwords (UC-04), raffinage IA local (UC-06).
 - Outils de transcription en ligne incompatibles avec ses obligations de confidentialité.
 
 **Fonctionnalités clés** : dictée dans Outlook (UC-01), mode réunion avec distinction par
-locuteur (UC-10), historique (UC-08), confidentialité vérifiable (transversal).
+locuteur (UC-10, diarisation UC-18), notes et résumé de session (UC-16, UC-17),
+historique (UC-08), confidentialité vérifiable (transversal).
 
 ---
 
@@ -120,7 +121,8 @@ injection system-wide (UC-01), robustesse (RE).
 - Jongler entre écoute, prise de notes et réponses.
 - Outils de transcription qui imposent un envoi des enregistrements en ligne.
 
-**Fonctionnalités clés** : transcription live (UC-09), mode réunion (UC-10), import de fichier audio (UC-07).
+**Fonctionnalités clés** : transcription live (UC-09), mode réunion (UC-10, diarisation UC-18),
+notes en session (UC-16), résumé de session (UC-17), import de fichier audio (UC-07).
 
 ---
 

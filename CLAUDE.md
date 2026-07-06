@@ -47,7 +47,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `tray.py` | Icône zone de notification (pystray) | fait |
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |
-| `dictionary.py` | Chargement dictionnaire + corrections | fait |
+| `dictionary.py` | Chargement dictionnaire + corrections + édition assistée UC-19 (`parse_entries`/`update_dictionary_file`, préserve commentaires/ordre) | fait |
 | `history.py` | Historique des transcriptions (SQLite local, thread-safe) | fait (V2) |
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost, désactivé par défaut) | fait (V2) |
 | `profiles.py` | Profils de contexte par application (override prompt/langue/dico) | fait (V2) |
@@ -56,11 +56,11 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
 | `conference.py` | Mode réunion : micro + sortie système simultanés (mixage itér. 1 / distinction source itér. 2 / diarisation locuteur itér. 3, UC-18) | fait (V2) |
 | `diarization.py` | Diarisation des locuteurs (UC-18) : empreinte MFCC **pur NumPy** + clustering en ligne, 100 % local, zéro modèle/réseau | fait (V2) |
-| `meeting.py` | Assistant de réunion : loopback + détection questions + réponses LLM locales | fait (V2) |
 | `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
 | `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
 | `modeldl.py` | Téléchargement **opt-in** du modèle Whisper depuis l'UI (bannière dashboard ; doctrine de `cuda.py`) | fait (V2) |
 | `singleinstance.py` | Instance unique (mutex + évènement nommés Win32) : relancer l'exe réaffiche la fenêtre ; no-op hors Windows | fait (V2) |
+| `version.py` | Numéro de version unique (fenêtre, exe, installeur) | fait (V2) |
 | `web/` | Assets de l'UI (`index.html`, `styles.css`, `app.js`) — rendu fidèle de la maquette, **police système** (pas de Google Fonts) | fait (V2) |
 
 ## Concurrence (à préserver)
@@ -86,12 +86,12 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   pendant le traitement. Arrêt : la sentinelle `None` est mise en file APRÈS le dernier segment ;
   `_consume` joint le worker avant de rendre la main (donc avant `_close_transcript`/`_finish`), si
   bien que `_segments`/`_file` ne sont touchés que par le worker (lus par `_finish` après le join).
-  La file est non bornée (latence en cas de retard, jamais de coupure). `meeting.py` hérite de ce
-  correctif (il s'appuie sur `LiveTranscriber`). NB : `conference.py` n'a jamais eu ce défaut — ses
-  sources capturent dans des threads séparés vers des tampons mémoire non bornés (`_StreamBuffer`).
-- **Réunion (V2)** : même règles que live (`stop_meeting()` sans verrou ni join) ;
-  l'analyse LLM (détection + réponse) tourne dans des threads workers dédiés par segment
-  suspect, sans bloquer la capture loopback.
+  La file est non bornée (latence en cas de retard, jamais de coupure). NB : `conference.py` n'a
+  jamais eu ce défaut — ses sources capturent dans des threads séparés vers des tampons mémoire non
+  bornés (`_StreamBuffer`).
+- **Réunion (V2)** : mêmes règles que live — `stop_conference()` ne tient pas `_lock` et ne
+  joint pas les threads de capture ; c'est le callback de fin (`_on_conference_finished`) qui
+  reprend `_lock` et repasse à IDLE.
 - **Notes en session (V2, UC-16)** : `LiveTranscriber._note_lock` et
   `ConferenceTranscriber._note_lock` sont des **verrous feuilles** (jamais imbriqués avec un
   autre verrou) protégeant `_segments`/`_notes`/`_file` — les notes arrivent du pont GUI
@@ -256,6 +256,15 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   (les sous-systèmes partagent ces objets), réécrit le fichier, puis applique à chaud : reset du modèle
   (taille/device/`local_files_only`), `reload_hotkey()`, reconstruction injecteur/LLM. La **langue** est
   lue à chaque transcription → pas de rechargement de modèle.
+- **Dictionnaire — édition assistée (V2, UC-19, `dictionary.py`)** : l'écran « Dictionnaire » de la
+  fenêtre liste/édite les entrées (`GuiApi.get_dictionary`/`save_dictionary` →
+  `apply_dictionary_from_gui`). Écriture via `update_dictionary_file` (ligne par ligne, préserve
+  commentaires/ordre — même doctrine que `configio`, sans ruamel) ; entrées invalides ignorées,
+  doublons dédupliqués. Puis **rechargement à chaud** (`transcriber.set_dictionary` +
+  `profiles.reload_dictionary`) — aucune relance, aucun rechargement de modèle. Échec d'écriture =
+  fichier intact + notification (`_notify_user`). Repli mode tray seul : « Ouvrir le dictionnaire »
+  (`open_dictionary`, crée le fichier avec en-tête d'aide si absent). L'édition reste possible même
+  si `dictionary.enabled: false` (le fichier est écrit ; l'effet attend l'activation).
 - **Injection FR** : privilégier le collage presse-papiers (Ctrl+V) à la frappe caractère par
   caractère — bien plus fiable pour les accents (é, è, à, ç) et les longs textes.
 - **Raccourci** : ne pas utiliser `Win+Space` (réservé par Windows). Défaut configurable.

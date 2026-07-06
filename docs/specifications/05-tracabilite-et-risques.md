@@ -10,6 +10,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-02 Déclencher | ● | ○ | | ● | ○ | |
 | UC-03 Arrêt auto | ○ | ○ | | ● | ○ | |
 | UC-04 Dictionnaire | ● | ● | | | ○ | |
+| UC-19 Gérer le dictionnaire | ● | ● | | | | |
 | UC-05 Profils | ● | ○ | | | | |
 | UC-06 IA locale | ● | ○ | ○ | | ○ | |
 | UC-07 Import fichier | | ○ | | | ● | |
@@ -39,6 +40,7 @@ Indique quels personas portent chaque cas d'utilisation (● = usage central, �
 | UC-02 Déclencher | FR-01 | US-01, US-06, US-08, RE-05, CO-09, BR-01 |
 | UC-03 Arrêt auto | FR-15 | RE-03, PE-04, US-06 |
 | UC-04 Dictionnaire | FR-07 | US-04, SU-02, BR-03 |
+| UC-19 Gérer le dictionnaire | FR-33, FR-07, FR-17 | US-05, SU-02, CO-01, CO-08, BR-03 |
 | UC-05 Profils | FR-08 | CO-10 |
 | UC-06 IA locale | FR-09, FR-22 | RE-06, CO-01, CO-03, BR-03 |
 | UC-07 Import fichier | FR-10, FR-20 | RE-02, US-02, US-07, CO-07, BR-06 |
@@ -65,7 +67,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-04 | UC-01 |
 | FR-05 | UC-01 |
 | FR-06 | UC-01 |
-| FR-07 | UC-01, UC-04 |
+| FR-07 | UC-01, UC-04, UC-19 |
 | FR-08 | UC-05 |
 | FR-09 | UC-06 |
 | FR-10 | UC-07 |
@@ -74,7 +76,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-13 | UC-10, UC-18 |
 | FR-15 | UC-03 |
 | FR-16 | UC-01, UC-09, UC-10 |
-| FR-17 | UC-12, UC-13 |
+| FR-17 | UC-12, UC-13, UC-19 |
 | FR-18 | UC-01, UC-14 |
 | FR-19 | UC-01, UC-09, UC-10 (exclusivité des modes) |
 | FR-20 | UC-01, UC-07, UC-09, UC-10 |
@@ -90,11 +92,12 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | FR-30 | UC-18 |
 | FR-31 | UC-18 |
 | FR-32 | UC-18, UC-12 |
+| FR-33 | UC-19, UC-04 |
 | US-01 | UC-01, UC-02 |
 | US-02 | UC-07, UC-08, UC-09, UC-10, UC-12 |
 | US-03 | UC-01 |
 | US-04 | UC-01, UC-04 |
-| US-05 | UC-12 |
+| US-05 | UC-12, UC-19 |
 | US-06 | UC-02, UC-03 |
 | US-07 | UC-07, UC-09, UC-10 |
 | US-08 | UC-02 |
@@ -124,21 +127,21 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | PE-06 | UC-16 |
 | PE-07 | UC-18 |
 | SU-01 | UC-12 |
-| SU-02 | UC-04 |
+| SU-02 | UC-04, UC-19 |
 | SU-03 | UC-08 (+ transverse) |
 | SU-04 | UC-13 |
 | SU-05 | transverse (qualité) |
 | SU-06 | transverse (architecture) |
 | SU-07 | transverse (conventions) |
 | SU-08 | UC-08, UC-12 |
-| CO-01 | UC-01, UC-06, UC-14, UC-16, UC-17 (+ transverse, cardinal) |
+| CO-01 | UC-01, UC-06, UC-14, UC-16, UC-17, UC-19 (+ transverse, cardinal) |
 | CO-02 | UC-14 |
 | CO-03 | UC-06, UC-17 |
 | CO-04 | UC-10, UC-18 |
 | CO-05 | UC-09, UC-10 |
 | CO-06 | UC-09, UC-10 |
 | CO-07 | UC-07 |
-| CO-08 | UC-13 |
+| CO-08 | UC-13, UC-19 |
 | CO-09 | UC-02, UC-16 |
 | CO-10 | UC-05 |
 | CO-11 | UC-13 |
@@ -152,7 +155,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | CO-19 | UC-18, UC-14 |
 | BR-01 | UC-01, UC-02, UC-16 (exclusivité, transverse aux modes) |
 | BR-02 | UC-01 |
-| BR-03 | UC-01, UC-04, UC-06 |
+| BR-03 | UC-01, UC-04, UC-06, UC-19 |
 | BR-04 | UC-01 |
 | BR-05 | UC-10 |
 | BR-06 | UC-07, UC-09, UC-10, UC-16, UC-17 |
@@ -188,7 +191,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 | Q-01 | Faut-il chiffrer la base d'historique SQLite (`whisperty.db`) au repos ? Aujourd'hui en clair sur le poste. | P-03 (RSSI) |
 | Q-02 | Faut-il une purge/expiration **temporelle** de l'historique (RGPD) en plus de la limite par nombre ? | P-03 |
 | Q-03 | Le mode réunion doit-il afficher une **bannière de consentement** plus formelle (case à cocher) plutôt qu'une simple notification ? | P-02, P-05 |
-| Q-04 | Faut-il une **interface de configuration** (au-delà de l'édition YAML) pour les personas moins techniques (P-04) ? | P-04, P-06 |
+| Q-04 | Faut-il une **interface de configuration** (au-delà de l'édition YAML) pour les personas moins techniques (P-04) ? | P-04, P-06 | → **Oui** — livré : écran Configuration (enregistrement dans `config.yaml`, application à chaud) et écran Dictionnaire (UC-19) dans la fenêtre ; l'édition directe des fichiers reste possible (mode tray seul). |
 | Q-05 | Souhaite-t-on une **rétroaction sonore/visuelle** au déclenchement (bip, overlay) en plus de l'icône tray ? | P-04 |
 | Q-06 | La diarisation par modèle (locuteurs individuels) sera-t-elle proposée un jour en **option hors-ligne désactivée par défaut** ? | P-05, P-03 | → **Oui** — tracé UC-18, CO-17…19, `speaker_diarization.enabled: false` par défaut. |
 | Q-07 | Doit-on cibler explicitement des **objectifs de latence chiffrés** (ex. < N s pour une phrase) par profil matériel ? | P-01, P-06 |
@@ -200,7 +203,7 @@ Vérifie qu'**aucune exigence n'est orpheline** (toute exigence sert ≥ 1 UC ou
 
 | Catégorie | Nb exigences | Couverture personas |
 |-----------|:------------:|---------------------|
-| Functionality (FR) | 31 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
+| Functionality (FR) | 32 *(dont FR-27 en `W` ; FR-14 retiré)* | P-01 → P-06 |
 | Usability (US) | 12 | P-01, P-04 (priorité), tous |
 | Reliability (RE) | 14 | P-04, P-02 (priorité), tous |
 | Performance (PE) | 7 | P-01, P-05, P-06 |
