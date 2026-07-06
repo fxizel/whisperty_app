@@ -1,7 +1,7 @@
 # Politique de confidentialité — Whisperty
 
 **Dernière mise à jour :** 6 juillet 2026  
-**Éditeur :** Softcom  
+**Éditeur :** projet personnel open source ([`fxizel/whisperty_app`](https://github.com/fxizel/whisperty_app))  
 **Application :** Whisperty (dictée vocale locale pour Windows 10/11)
 
 **URL de cette politique :**  
@@ -32,9 +32,9 @@ Ces données restent **sous votre contrôle**. Vous pouvez les supprimer en dés
 l'application (certaines données utilisateur sont conservées par choix lors de la
 désinstallation — voir l'installeur) ou en effaçant les fichiers concernés.
 
-## 3. Absence de collecte par l'éditeur
+## 3. Absence de collecte par un tiers
 
-Softcom **ne reçoit pas** :
+Le développeur du projet **ne reçoit pas** :
 
 - vos enregistrements audio ;
 - vos transcriptions ;
@@ -72,10 +72,11 @@ par l'application. Le texte dicté ne doit jamais quitter votre machine via cett
 
 Whisperty s'appuie sur des composants exécutés **sur votre poste** (Whisper /
 `faster-whisper`, bibliothèques audio, WebView2 pour l'interface). Aucun de ces composants
-n'est utilisé par Softcom pour collecter vos données.
+n'est utilisé par le développeur pour collecter vos données.
 
 Les téléchargements opt-in (modèle, CUDA) s'effectuent directement entre votre PC et les
-hébergeurs concernés (ex. Hugging Face, NVIDIA), sans transit par un serveur Softcom.
+hébergeurs concernés (ex. Hugging Face, NVIDIA), **sans intermédiaire** et sans transit
+par un serveur de l'éditeur.
 
 ## 7. Sécurité
 
@@ -85,8 +86,8 @@ comme pour tout document local sensible.
 
 ## 8. Vos droits
 
-Étant donné qu'aucune donnée personnelle n'est transmise à Softcom, il n'y a pas de dossier
-utilisateur centralisé à consulter chez l'éditeur. Vous gérez vos données localement :
+Étant donné qu'aucune donnée personnelle n'est transmise au développeur, il n'y a pas de dossier
+utilisateur centralisé à consulter chez un tiers. Vous gérez vos données localement :
 historique, transcriptions exportées, configuration.
 
 Pour toute question relative à cette politique, ouvrez une discussion sur le dépôt public :
@@ -100,4 +101,4 @@ les portails de distribution.
 
 ## 10. Contact
 
-**Softcom** — via le dépôt GitHub : https://github.com/fxizel/whisperty_app
+Via le dépôt GitHub : https://github.com/fxizel/whisperty_app

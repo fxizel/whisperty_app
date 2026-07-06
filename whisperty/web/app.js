@@ -200,7 +200,7 @@ const Mock = (() => {
     win_move: () => ({ ok: true }),
     get_version: () => ({
       version: "0.1.0",
-      publisher: "Softcom",
+      publisher: "fxizel",
       repositoryUrl: "https://github.com/fxizel/whisperty_app",
       privacyPolicyUrl: "https://github.com/fxizel/whisperty_app/blob/main/docs/privacy-policy.md",
     }),

@@ -19,7 +19,7 @@
 #ifndef MyAppVersionInfo
   #define MyAppVersionInfo "0.3.0.0"
 #endif
-#define MyAppPublisher "Softcom"
+#define MyAppPublisher "fxizel"
 #define MyAppPublisherURL "https://github.com/fxizel/whisperty_app"
 #define MyPrivacyPolicyURL "https://github.com/fxizel/whisperty_app/blob/main/docs/privacy-policy.md"
 #define MyAppExeName "whisperty.exe"

@@ -9,7 +9,7 @@ REPOSITORY_URL = "https://github.com/fxizel/whisperty_app"
 # de signature de code, Microsoft Store, etc.).
 PRIVACY_POLICY_URL = f"{REPOSITORY_URL}/blob/main/docs/privacy-policy.md"
 
-PUBLISHER = "Softcom"
+PUBLISHER = "fxizel"  # Projet personnel open source (dépôt GitHub fxizel/whisperty_app).
 
 
 def legal_info() -> dict[str, str]:

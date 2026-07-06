@@ -30,11 +30,11 @@ VSVersionInfo(
     StringFileInfo([
       StringTable(
         '040C04B0',
-        [StringStruct('CompanyName', 'Softcom'),
+        [StringStruct('CompanyName', 'fxizel'),
         StringStruct('FileDescription', 'Whisperty — dictée vocale locale'),
         StringStruct('FileVersion', '{__version__}'),
         StringStruct('InternalName', 'whisperty'),
-        StringStruct('LegalCopyright', 'Copyright © Softcom'),
+        StringStruct('LegalCopyright', 'Copyright © fxizel'),
         StringStruct('OriginalFilename', 'whisperty.exe'),
         StringStruct('ProductName', 'Whisperty'),
         StringStruct('ProductVersion', '{__version__}')])
