@@ -26,7 +26,11 @@
 [CmdletBinding()]
 param(
     [string]$Model = "",
-    [switch]$NoModel
+    [switch]$NoModel,
+    [switch]$Sign,
+    [string]$SignPfx = "",
+    [string]$SignPassword = "",
+    [string]$SignThumbprint = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,6 +87,18 @@ Invoke-Checked { & $py -m PyInstaller --noconfirm "$root\whisperty.spec" } "PyIn
 $appDir = Join-Path $root "dist\whisperty"
 if (-not (Test-Path "$appDir\whisperty.exe")) { throw "whisperty.exe introuvable dans $appDir." }
 
+# --- 5b. Signature Authenticode (opt-in ; supprime SmartScreen si certificat valide) -
+$doSign = $Sign.IsPresent -or $SignPfx -or $SignThumbprint -or $env:WHISPERTY_SIGN_PFX -or $env:WHISPERTY_SIGN_THUMBPRINT
+if ($doSign) {
+    Write-Host "Signature Authenticode de whisperty.exe…" -ForegroundColor Cyan
+    $signArgs = @{ Path = "$appDir\whisperty.exe" }
+    if ($SignPfx) { $signArgs.SignPfx = $SignPfx }
+    if ($SignPassword) { $signArgs.SignPassword = $SignPassword }
+    if ($SignThumbprint) { $signArgs.SignThumbprint = $SignThumbprint }
+    & "$PSScriptRoot\sign.ps1" @signArgs
+    if ($LASTEXITCODE -ne 0) { throw "Échec de la signature Authenticode." }
+}
+
 # --- 6. Réglages utilisateur déposés À CÔTÉ de l'exe (éditables) ----------------
 Copy-Item "$root\config.yaml" $appDir -Force
 Copy-Item "$root\dictionary.txt" $appDir -Force
@@ -138,4 +154,7 @@ else { Write-Host "  Sans modèle (léger) : téléchargé au 1er lancement" }
 Write-Host ""
 Write-Host "Étapes suivantes :"
 Write-Host "  - Tester :    .\dist\whisperty\whisperty.exe"
-Write-Host "  - Installeur : compiler installer\whisperty.iss avec Inno Setup (ISCC.exe)"
+Write-Host "  - Installeur : .\scripts\make_installer.ps1$(if ($doSign) { ' -Sign' })"
+if (-not $doSign) {
+    Write-Host "  - SmartScreen : ajoutez -Sign (certificat requis) — voir installer\README.md"
+}

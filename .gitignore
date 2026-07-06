@@ -40,6 +40,9 @@ installer_log.txt
 *.sqlite
 *.db
 
+*.pfx
+*.p12
+
 # OS / IDE
 .vscode/
 .idea/

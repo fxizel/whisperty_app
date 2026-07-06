@@ -19,6 +19,12 @@
 #ifndef MyAppVersionInfo
   #define MyAppVersionInfo "0.3.0.0"
 #endif
+#ifndef SignEnabled
+  #define SignEnabled "0"
+#endif
+#ifndef SignScript
+  #define SignScript ""
+#endif
 #define MyAppPublisher "Softcom"
 #define MyAppExeName "whisperty.exe"
 ; Dossier source produit par scripts\build.ps1 (relatif à ce .iss).
@@ -60,6 +66,12 @@ UninstallDisplayName={#MyAppName}
 CloseApplications=yes
 RestartApplications=no
 
+#if SignEnabled == "1"
+; Signature Authenticode du setup et du désinstalleur (scripts\sign_inno.ps1 via SignTool).
+SignTool=whispertysign
+SignedUninstaller=yes
+#endif
+
 [Languages]
 Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 
@@ -96,6 +108,11 @@ Description: "Lancer {#MyAppName} maintenant"; Filename: "{app}\{#MyAppExeName}"
 ; Nettoyage des artefacts runtime (on PRÉSERVE config/dictionnaire/historique/transcriptions).
 Type: filesandordirs; Name: "{app}\logs"
 Type: filesandordirs; Name: "{app}\_internal\__pycache__"
+
+#if SignEnabled == "1"
+[SignTool]
+Name: "whispertysign"; Command: "powershell -NoProfile -ExecutionPolicy Bypass -File ""{#SignScript}"" $f"
+#endif
 
 [Code]
 { Ferme l'instance en cours d'exécution avant d'écrire les fichiers. Whisperty est
