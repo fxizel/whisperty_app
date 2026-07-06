@@ -20,6 +20,8 @@
   #define MyAppVersionInfo "0.3.0.0"
 #endif
 #define MyAppPublisher "Softcom"
+#define MyAppPublisherURL "https://github.com/fxizel/whisperty_app"
+#define MyPrivacyPolicyURL "https://github.com/fxizel/whisperty_app/blob/main/docs/privacy-policy.md"
 #define MyAppExeName "whisperty.exe"
 ; Dossier source produit par scripts\build.ps1 (relatif à ce .iss).
 #define SourceDir "..\dist\whisperty"
@@ -31,6 +33,8 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppPublisherURL}
+AppSupportURL={#MyPrivacyPolicyURL}
 VersionInfoVersion={#MyAppVersionInfo}
 
 ; --- Installation par utilisateur (aucun droit admin requis) ---

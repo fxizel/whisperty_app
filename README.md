@@ -182,7 +182,8 @@ en cours lors d'une mise à jour et préserve config/historique. Si WebView2 man
 d'ouvrir la page de téléchargement. Variantes build : `-Model small` · `-NoModel` (l'app
 proposera alors le téléchargement du modèle au premier lancement).
 
-> Procédure détaillée : **[`installer/README.md`](installer/README.md)**.
+> Procédure détaillée : **[`installer/README.md`](installer/README.md)**.  
+> Politique de confidentialité (URL publique) : **[`docs/privacy-policy.md`](docs/privacy-policy.md)**.
 
 Pour activer le démarrage automatique sans installeur (build de dev) :
 

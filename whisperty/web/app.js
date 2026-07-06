@@ -198,7 +198,12 @@ const Mock = (() => {
     copy_text: (t) => { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} return { ok: true }; },
     win_minimize: () => ({ ok: true }), win_maximize: () => ({ ok: true }), win_close: () => ({ ok: true }),
     win_move: () => ({ ok: true }),
-    get_version: () => ({ version: "0.1.0" }),
+    get_version: () => ({
+      version: "0.1.0",
+      publisher: "Softcom",
+      repositoryUrl: "https://github.com/fxizel/whisperty_app",
+      privacyPolicyUrl: "https://github.com/fxizel/whisperty_app/blob/main/docs/privacy-policy.md",
+    }),
   };
 })();
 
@@ -528,6 +533,14 @@ async function loadVersion() {
   if (sb) sb.textContent = label;
   const cfg = $("#config-version");
   if (cfg) cfg.textContent = "Whisperty " + label;
+  const privacyUrl = data.privacyPolicyUrl || "";
+  const privacyLink = $("#privacy-policy-link");
+  if (privacyLink && privacyUrl) {
+    privacyLink.href = privacyUrl;
+    privacyLink.title = privacyUrl;
+  }
+  const privacyHidden = $("#privacy-policy-url");
+  if (privacyHidden) privacyHidden.textContent = privacyUrl;
 }
 
 async function loadDashboard() {

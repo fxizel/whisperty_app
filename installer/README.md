@@ -46,6 +46,22 @@ winget install --id JRSoftware.InnoSetup -e
 Le script localise `ISCC.exe` puis compile `installer\whisperty.iss` →
 `dist\installer\Whisperty-Setup-<version>.exe`.
 
+### Politique de confidentialité (URL)
+
+Pour les portails de signature de code, de distribution ou les formulaires éditeur,
+recopiez l'URL publique de la politique de confidentialité :
+
+```
+https://github.com/fxizel/whisperty_app/blob/main/docs/privacy-policy.md
+```
+
+Fichier prêt à l'emploi : `installer\privacy-policy-url.txt`  
+Texte intégral : `docs\privacy-policy.md`  
+Source unique dans le code : `whisperty\legal.py` (`PRIVACY_POLICY_URL`).
+
+L'installeur référence cette URL dans `AppSupportURL` ; l'écran Configuration de
+l'application affiche un lien « Politique de confidentialité ».
+
 ## Ce que fait l'installeur (`whisperty.iss`)
 
 - **Installation par utilisateur** dans `%LocalAppData%\Programs\Whisperty` (sans admin).

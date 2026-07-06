@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from .modeldl import model_size_name
+from .legal import legal_info
 from .version import __version__
 
 if TYPE_CHECKING:
@@ -136,8 +137,8 @@ class GuiApi:
         return self._safe(lambda: self._window.move(int(x), int(y)))
 
     def get_version(self) -> dict:
-        """Numéro de version de l'application (source unique : whisperty.version)."""
-        return {"version": __version__}
+        """Version et métadonnées légales (source unique : whisperty.version / legal)."""
+        return {"version": __version__, **legal_info()}
 
     # -- état / dashboard ------------------------------------------------------
     def poll(self) -> dict:
