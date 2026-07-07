@@ -400,6 +400,8 @@ def test_profiles() -> None:
 # =============================================================================
 def test_ai_local_guard() -> None:
     import json
+    import os
+    import urllib.request
 
     import whisperty.ai as ai_mod
     from whisperty.ai import LocalLLM, is_local_endpoint
@@ -412,6 +414,32 @@ def test_ai_local_guard() -> None:
     assert not is_local_endpoint("http://api.openai.com/v1/chat/completions")
     assert not is_local_endpoint("https://example.com/x")
     assert not is_local_endpoint("ftp://localhost/x")
+
+    # Garde anti-proxy (contrainte cardinale) : l'opener force la connexion DIRECTE.
+    # On force un proxy d'environnement et on vérifie qu'AUCUN handler de proxy actif
+    # n'est enregistré — sans ProxyHandler({}) explicite, urllib capterait ce proxy
+    # (variables d'environnement, registre WinINET) et le texte dicté transiterait par
+    # un hôte potentiellement distant malgré la garde localhost. NB : un ProxyHandler
+    # au dict vide n'expose aucune méthode *_open, il n'apparaît donc pas dans .handlers.
+    saved_env = {k: os.environ.get(k) for k in ("http_proxy", "https_proxy")}
+    os.environ["http_proxy"] = "http://proxy.evil.example.com:8080"
+    os.environ["https_proxy"] = "http://proxy.evil.example.com:8080"
+    try:
+        opener = ai_mod._build_opener()
+        active_proxies = {
+            scheme: url
+            for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)
+            for scheme, url in h.proxies.items()
+        }
+        assert not active_proxies, f"proxy actif dans l'opener IA : {active_proxies}"
+        # Et le refus de redirection reste bien en place (défense complémentaire).
+        assert any(isinstance(h, ai_mod._NoRedirectHandler) for h in opener.handlers)
+    finally:
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     # Désactivé → texte inchangé, aucun appel réseau.
     assert LocalLLM(AIConfig(enabled=False)).refine("salut") == "salut"
@@ -470,7 +498,7 @@ def test_ai_local_guard() -> None:
             assert llm.refine("texte brut") == "texte brut"
     finally:
         ai_mod._OPENER = original
-    print("[8] IA locale : garde localhost + URL finale locale + désactivé + réponse  OK")
+    print("[8] IA locale : garde localhost + anti-proxy + URL finale locale + désactivé + réponse  OK")
 
 
 # =============================================================================

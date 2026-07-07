@@ -45,8 +45,22 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# Opener dédié : handlers par défaut, mais sans suivi de redirection.
-_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+def _build_opener() -> urllib.request.OpenerDirector:
+    """Opener dédié : connexion DIRECTE (jamais de proxy), sans suivi de redirection.
+
+    Sans ``ProxyHandler({})``, ``build_opener`` installerait le ProxyHandler par
+    défaut, qui suit le proxy système (variables d'environnement, registre WinINET) :
+    le POST — donc le texte dicté ou le transcript entier — partirait vers le serveur
+    proxy, potentiellement distant, malgré la garde localhost (le proxy est en amont
+    de la connexion, pas une redirection ; et le bypass Windows « <local> » ne couvre
+    pas ``127.0.0.1`` par défaut).
+    """
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirectHandler()
+    )
+
+
+_OPENER = _build_opener()
 
 
 def is_local_endpoint(endpoint: str) -> bool:
