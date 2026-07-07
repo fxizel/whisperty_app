@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/ruff_check.py",
+            "timeout": 90,
+            "statusMessage": "Lint ruff du fichier édité…"
+          },
+          {
+            "type": "command",
+            "command": "python .claude/hooks/zero_network_guard.py",
+            "timeout": 30,
+            "statusMessage": "Garde zéro-réseau…"
+          }
+        ]
+      }
+    ]
+  }
+}
