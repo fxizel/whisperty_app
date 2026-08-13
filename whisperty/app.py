@@ -31,6 +31,7 @@ from .injector import TextInjector
 from .live import LiveTranscriber
 from .loopback import list_speakers
 from .profiles import ProfileResolver
+from .punctuation import apply_commands
 from .recorder import AudioRecorder, MicrophoneError
 from .transcriber import ModelNotAvailableError, Transcriber
 from .tray import Tray, TrayState
@@ -307,6 +308,10 @@ class WhispertyApp:
             profile = self.profiles.for_app(app_name)
             text = self.transcriber.transcribe(audio, profile)
             self._set_model_error(None)  # le chargement a réussi : bannière levée
+            # Commandes de ponctuation dictées (opt-in) : DICTÉE seulement, et AVANT
+            # le raffinage LLM (qui voit ainsi la ponctuation voulue, pas les mots).
+            if self.config.punctuation.enabled:
+                text = apply_commands(text)
             text = self.llm.refine(text)  # raffinage LLM local (no-op si désactivé)
             if text:
                 # Confidentialité : le texte dicté ne va PAS dans les logs au niveau
@@ -646,7 +651,37 @@ class WhispertyApp:
             )
         except Exception:  # noqa: BLE001 — l'app peut être en cours d'arrêt (base fermée)
             logger.exception("Archivage du résumé échoué")
-        self._notify_user(f"Résumé de {mode} prêt (transcript + historique).", "info")
+        report_path = self._maybe_report(mode, summary, text, path)
+        extra = " Compte rendu écrit à côté du transcript." if report_path else ""
+        self._notify_user(f"Résumé de {mode} prêt (transcript + historique).{extra}", "info")
+
+    def _maybe_report(self, mode: str, summary: str, transcript: str, path: object):
+        """Rend le compte rendu Markdown si ``summary.template`` est configuré (opt-in).
+
+        Best-effort dans le worker de résumé (jamais sous verrou) : un échec est
+        journalisé, le résumé et l'archivage ont déjà eu lieu.
+        """
+        template = (getattr(self.config.summary, "template", "") or "").strip()
+        if not template:
+            return None
+        try:
+            from .report import write_report
+
+            export_dir = (
+                self.config.conference.export_dir
+                if mode == "réunion" else self.config.live.transcript_dir
+            )
+            return write_report(
+                self.config.resolve(template),
+                source=mode,
+                resume=summary,
+                transcript=transcript,
+                transcript_path=Path(str(path)) if path else None,
+                fallback_dir=self.config.resolve(export_dir),
+            )
+        except Exception:  # noqa: BLE001 — opt-in de confort, jamais bloquant
+            logger.exception("Génération du compte rendu échouée")
+            return None
 
     def add_note_bookmark(self) -> None:
         """Signet : note horodatée sans texte saisi (raccourci global, UC-16).

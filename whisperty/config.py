@@ -69,6 +69,13 @@ class LoggingConfig:
 
 
 @dataclass
+class PunctuationConfig:
+    """Commandes de ponctuation dictées (« point », « à la ligne »…) — opt-in."""
+
+    enabled: bool = False
+
+
+@dataclass
 class HistoryConfig:
     """Historique local des transcriptions (V2, SQLite)."""
 
@@ -186,6 +193,9 @@ class SummaryConfig:
     """
 
     enabled: bool = False
+    # Gabarit Markdown du COMPTE RENDU (opt-in supplémentaire, cf. report.py) :
+    # chemin relatif à config.yaml ; "" = pas de compte rendu (résumé seul).
+    template: str = ""
     prompt: str = (
         "Tu résumes en français la transcription d'une réunion ou d'une écoute "
         "audio. Réponds en points concis : sujets abordés, décisions prises, "
@@ -228,6 +238,7 @@ class Config:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     dictionary: DictionaryConfig = field(default_factory=DictionaryConfig)
+    punctuation: PunctuationConfig = field(default_factory=PunctuationConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     ai: AIConfig = field(default_factory=AIConfig)
@@ -277,6 +288,7 @@ class Config:
             hotkey=_build(HotkeyConfig, data.get("hotkey")),
             output=_build(OutputConfig, data.get("output")),
             dictionary=_build(DictionaryConfig, data.get("dictionary")),
+            punctuation=_build(PunctuationConfig, data.get("punctuation")),
             logging=_build(LoggingConfig, data.get("logging")),
             history=_build(HistoryConfig, data.get("history")),
             ai=_build(AIConfig, data.get("ai")),

@@ -50,6 +50,15 @@ dictionary:
   enabled: true
   path: dictionary.txt    # mots biaisés (hotwords) + corrections "mauvais => bon"
 
+punctuation:
+  # Commandes de ponctuation DICTÉES (saisie mains libres) : « point », « virgule »,
+  # « deux points », « point-virgule », « point d'interrogation/d'exclamation »,
+  # « points de suspension », « à la ligne », « nouveau paragraphe », « ouvrez/fermez
+  # la parenthèse », « ouvrez/fermez les guillemets », « tiret ». Appliquées à la
+  # DICTÉE seulement (jamais au live/réunion/import, où « point » est du contenu).
+  # Opt-in : des faux positifs sont possibles (« c'est un bon point » → « … bon. »).
+  enabled: false
+
 logging:
   level: INFO             # DEBUG | INFO | WARNING | ERROR
   path: logs/whisperty.log
@@ -179,4 +188,9 @@ summary:
     ou décousu, dis-le simplement.
   timeout: 120            # secondes (un transcript entier est plus long qu'une dictée)
   max_chars: 24000        # tronque l'entrée du LLM au-delà (début + fin conservés)
+  # template : gabarit Markdown d'un COMPTE RENDU écrit à côté du transcript quand le
+  # résumé réussit (balises {{date}} {{heure}} {{source}} {{resume}} {{transcript}}
+  # {{fichier}}). Chemin relatif à config.yaml ; le fichier est créé avec un exemple
+  # éditable au premier usage. "" = désactivé (résumé seul, comportement historique).
+  template: ""            # ex. : templates/compte-rendu.md
 

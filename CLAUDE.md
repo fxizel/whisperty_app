@@ -45,6 +45,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `cuda.py` | Détection GPU/composants CUDA + installation **opt-in** des wheels nvidia (cuBLAS/cuDNN) | fait |
 | `injector.py` | Injection texte (collage Ctrl+V par défaut, frappe en repli) | fait |
 | `feedback.py` | Retour sonore local de la dictée (winsound, opt-out `audio.sound_feedback`, aucun verrou) | fait |
+| `punctuation.py` | Commandes de ponctuation dictées (« point », « à la ligne »… ; opt-in `punctuation.enabled`, DICTÉE seulement — jamais live/réunion/import) | fait |
+| `report.py` | Compte rendu Markdown depuis un gabarit éditable (opt-in `summary.template`, rendu dans le worker de résumé, never-fail) | fait |
 | `tray.py` | Icône zone de notification (pystray) | fait |
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |

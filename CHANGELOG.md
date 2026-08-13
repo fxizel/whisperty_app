@@ -8,6 +8,15 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ### Ajouté
 
+- **Commandes de ponctuation dictées** (`punctuation.enabled`, opt-in) : « point »,
+  « virgule », « deux points », « point d'interrogation », « à la ligne », « nouveau
+  paragraphe », « ouvrez/fermez la parenthèse », « ouvrez/fermez les guillemets »… sont
+  converties en ponctuation réelle (typographie française, majuscules de début de
+  phrase). Dictée seulement — jamais appliquées au live, à la réunion ni à l'import.
+- **Compte rendu par gabarit** (`summary.template`, opt-in) : quand le résumé de fin de
+  session réussit, un compte rendu Markdown est rendu depuis un gabarit éditable
+  (balises `{{date}}`, `{{source}}`, `{{resume}}`, `{{transcript}}`…) et écrit à côté
+  du transcript ; le gabarit d'exemple est créé au premier usage.
 - **Retour sonore de dictée** (`audio.sound_feedback`, actif par défaut) : bips brefs
   100 % locaux (winsound) au démarrage et à l'arrêt de l'enregistrement — le raccourci
   est confirmé à l'oreille, sans regarder le tray. Désactivable dans `config.yaml`.
