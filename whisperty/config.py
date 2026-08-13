@@ -65,7 +65,6 @@ class DictionaryConfig:
 class LoggingConfig:
     level: str = "INFO"
     path: str = "logs/whisperty.log"
-    max_history: int = 200
 
 
 @dataclass

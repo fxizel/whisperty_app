@@ -18,6 +18,7 @@ Contraintes du projet :
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -534,12 +535,35 @@ class GuiApi:
         return {"ok": True}
 
 
+def _harden_webview_env() -> None:
+    """Réduit le trafic de fond du runtime WebView2 (Edge, base Chromium).
+
+    La page est 100 % locale : le navigateur n'a aucune raison légitime de parler
+    au réseau. Ces arguments coupent les canaux de fond connus (réseau d'arrière-
+    plan, rapports de fiabilité de domaine, mise à jour de composants). Best-effort :
+    un argument inconnu est ignoré par Chromium, et le trafic résiduel imputable au
+    composant OS (Edge/WebView2 lui-même) ne dépend pas de Whisperty. On COMPLÈTE
+    un réglage utilisateur existant sans l'écraser.
+    """
+    var = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    wanted = (
+        "--disable-background-networking",
+        "--disable-domain-reliability",
+        "--disable-component-update",
+    )
+    existing = os.environ.get(var, "")
+    merged = existing.split() if existing else []
+    merged.extend(arg for arg in wanted if arg not in merged)
+    os.environ[var] = " ".join(merged)
+
+
 def launch_gui(app: "WhispertyApp") -> None:
     """Crée la fenêtre et tient le thread principal jusqu'à sa destruction.
 
     Doit être appelée sur le thread principal (exigence des GUI Windows). Lève si
     ``pywebview`` ou WebView2 est indisponible : l'appelant (``run``) gère le repli.
     """
+    _harden_webview_env()  # AVANT la création du runtime WebView2
     import webview  # import paresseux : dépendance optionnelle
 
     api = GuiApi(app)

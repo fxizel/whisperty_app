@@ -1,7 +1,7 @@
 ; ============================================================================
 ;  Whisperty — script d'installation Inno Setup 6
-;  Compiler avec :  ISCC.exe installer\whisperty.iss
-;  (ou via scripts\make_installer.ps1 qui localise ISCC.exe)
+;  Compiler avec :  scripts\make_installer.ps1  (localise ISCC.exe et transmet la
+;  version depuis whisperty/version.py ; un ISCC direct exige /DMyAppVersion=X.Y.Z)
 ;
 ;  Prérequis : avoir produit dist\whisperty\ au préalable (scripts\build.ps1).
 ;
@@ -14,10 +14,13 @@
 
 #define MyAppName "Whisperty"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.0"
+  ; Pas de version en dur : un ISCC direct produirait un setup étiqueté avec une
+  ; ANCIENNE version mais le contenu courant. La source unique est whisperty/version.py,
+  ; transmise par scripts\make_installer.ps1 (/DMyAppVersion=X.Y.Z).
+  #error Compilez via scripts\make_installer.ps1 (ou passez /DMyAppVersion=X.Y.Z)
 #endif
 #ifndef MyAppVersionInfo
-  #define MyAppVersionInfo "0.3.0.0"
+  #define MyAppVersionInfo MyAppVersion + ".0"
 #endif
 #ifndef SignEnabled
   #define SignEnabled "0"

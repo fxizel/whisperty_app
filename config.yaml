@@ -51,7 +51,6 @@ dictionary:
 logging:
   level: INFO             # DEBUG | INFO | WARNING | ERROR
   path: logs/whisperty.log
-  max_history: 200        # (obsolète) remplacé par history.max_entries ci-dessous
 
 # --- V2 -----------------------------------------------------------------------
 

@@ -129,14 +129,14 @@ la plupart des changements à chaud.
 | `audio` | `device`, `samplerate`, `vad_threshold`, `silence_duration`, `max_duration` |
 | `transcription` | `model`, `language`, `device` (cpu/cuda), `compute_type`, `local_files_only` |
 | `hotkey` | `mode` (toggle/push_to_talk), `combo`, `double_tap_key` |
-| `output` | `method` (paste/type), `restore_clipboard` |
+| `output` | `method` (paste/type), `restore_clipboard`, `restore_delay` (délai avant restauration du presse-papiers — augmenter sur machine lente/RDP) |
 | `dictionary` | `enabled`, `path` |
 | `history` | `enabled`, `path`, `max_entries` |
 | `ai` | `enabled`, `endpoint` (**local uniquement**), `model`, `prompt` |
 | `profiles` | `enabled`, `definitions` |
-| `live` | `device`, `max_segment`, `silence_duration`, `transcript_dir` |
-| `conference` | `system_device`, `mic_device`, `distinguish_speakers`, `speaker_diarization`, `export_dir` |
-| `notes` | `bookmark_hotkey` (signet horodaté en session live/réunion) |
+| `live` | `device`, `block_duration`, `max_segment`, `silence_duration`, `vad_threshold`, `transcript_dir` |
+| `conference` | `system_device`, `mic_device`, `distinguish_speakers`, `mic_label`/`system_label`, `speaker_diarization`, `export_dir`, `export_format` (txt/md) |
+| `notes` | `bookmark_hotkey` (signet horodaté en session live/réunion ; `""` désactive le signet, la saisie dans la fenêtre reste possible) |
 | `summary` | `enabled`, `prompt`, `timeout`, `max_chars` (résumé LLM local en fin de session) |
 | `gui` | `enabled` (`false` ou `--no-gui` = tray seul) |
 

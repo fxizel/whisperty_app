@@ -159,6 +159,24 @@ def _model_download_running() -> bool:
         return False
 
 
+def _disable_ort_telemetry() -> None:
+    """Coupe la télémétrie TraceLogging/ETW des builds Windows d'onnxruntime.
+
+    onnxruntime (dépendance transitive de faster-whisper, VAD Silero) active par
+    défaut un canal de diagnostic Windows susceptible de remonter des métadonnées
+    d'usage à Microsoft. Pas d'appel réseau direct du processus, mais un canal de
+    sortie indirect incompatible avec l'esprit de la contrainte cardinale.
+    Best-effort : ne fait rien si onnxruntime n'est pas chargé.
+    """
+    ort = sys.modules.get("onnxruntime")
+    if ort is None:
+        return
+    try:
+        ort.disable_telemetry_events()
+    except Exception:  # noqa: BLE001 — l'API peut varier selon la version/le build
+        logger.debug("disable_telemetry_events indisponible.", exc_info=True)
+
+
 def _set_offline_env(offline: bool) -> None:
     """(Dé)pose les variables hors-ligne Hugging Face selon ``local_files_only``.
 
@@ -170,6 +188,10 @@ def _set_offline_env(offline: bool) -> None:
     valeurs à l'import (constantes de module) : on resynchronise donc aussi le module
     s'il est déjà chargé (best-effort, structure interne susceptible de changer).
     """
+    # Télémétrie huggingface_hub coupée en PERMANENCE (métadonnées d'usage jointes
+    # aux requêtes des téléchargements opt-in) — indépendant du mode hors-ligne,
+    # coût nul, et un réglage utilisateur explicite est respecté (setdefault).
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     if offline and _model_download_running():
         # Un téléchargement opt-in a levé la garde : ne pas la reposer sous ses pieds.
         # Elle sera reposée par le chargement du modèle une fois celui-ci en place
@@ -302,6 +324,7 @@ class Transcriber:
             raise ModelNotAvailableError(
                 "faster-whisper n'est pas installé : pip install faster-whisper"
             ) from exc
+        _disable_ort_telemetry()  # onnxruntime (VAD Silero) vient d'être importé
 
         # Device/compute EFFECTIFS : repli gracieux sur CPU si CUDA est demandé mais
         # indisponible (cf. _effective_device_compute). On évite ainsi le plantage
