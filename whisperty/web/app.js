@@ -618,8 +618,13 @@ function renderLiveLines(el, lines) {
 async function pollLiveFeed(state, liveRev) {
   if (!isLiveFeed(state)) return;
   if (liveRev === ui.liveRev) return;            // rien de neuf depuis le dernier fetch
-  ui.liveRev = liveRev;
-  const data = (await call("get_live_text")) || {};
+  let data;
+  try {
+    data = (await call("get_live_text")) || {};
+  } catch (_err) {
+    return; // rev non consommée : la mise à jour sera retentée au prochain tick
+  }
+  ui.liveRev = liveRev;                          // consommée APRÈS un fetch réussi
   if (data.rev != null) ui.liveRev = data.rev;   // évite un re-fetch si rev a avancé entre-temps
   const el = $("#last-text");
   if (!isLiveFeed(ui.state)) return;             // le mode a pu changer pendant l'await
@@ -865,7 +870,12 @@ function wireConferenceConfig() {
   });
 }
 
-function setSwitch(el, on) { el.classList.toggle("on", !!on); }
+function setSwitch(el, on) {
+  el.classList.toggle("on", !!on);
+  // Accessibilité : l'état visuel (classe .on) doit aussi être annoncé aux
+  // lecteurs d'écran (role="switch" + aria-checked posés dans index.html).
+  el.setAttribute("aria-checked", on ? "true" : "false");
+}
 
 // ───────────────────────────── Support GPU (CUDA) ──────────────────────────
 let gpuPollTimer = null;
@@ -1012,9 +1022,26 @@ function toggleCapture() {
 
 function onCaptureKey(e) {
   e.preventDefault(); e.stopPropagation();
+  // Échap = ANNULER la capture (le raccourci précédent est conservé) — sinon
+  // l'utilisateur qui veut annuler se retrouverait avec <esc> seul comme
+  // déclencheur de dictée (déclenché à chaque Échap système).
+  if (e.key === "Escape") {
+    endCapture(ui.cfg.combo);
+    return;
+  }
   const combo = eventToCombo(e);
   if (!combo) return; // attend une touche non-modificatrice valide
+  // Touche « nue » (lettre, espace, entrée…) : exiger un modificateur, sinon
+  // chaque frappe normale de cette touche déclencherait la dictée. Les touches
+  // de fonction (F1-F24) restent acceptées seules.
+  const isFnKey = /^<f\d{1,2}>$/.test(combo.split("+").pop());
+  const hasMod = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
+  if (!hasMod && !isFnKey) return;
   ui.cfg.combo = combo;
+  endCapture(combo);
+}
+
+function endCapture(combo) {
   ui.capturing = false;
   $("#combo-capture").querySelector("span").textContent = "Modifier";
   renderKeys($("#combo-display"), combo);
@@ -1374,8 +1401,24 @@ function init() {
   loadVersion();
   loadDashboard();
   loadSources();
-  refreshState();
-  setInterval(refreshState, 200);
+  pollLoop();
+}
+
+// Boucle de polling CHAÎNÉE (pas de setInterval) : jamais deux poll() en vol —
+// chaque appel du pont crée un thread Python côté pywebview et prend le verrou de
+// la machine à états ; un verrou tenu quelques secondes (ouverture du micro) ne
+// doit pas empiler des rafales d'appels résolus dans le désordre. En cas d'erreur
+// du pont, repli progressif (jusqu'à 5 s) puis retour au rythme nominal.
+const POLL_MS = 200;
+let pollDelay = POLL_MS;
+async function pollLoop() {
+  try {
+    await refreshState();
+    pollDelay = POLL_MS;
+  } catch (_err) {
+    pollDelay = Math.min(pollDelay * 2, 5000);
+  }
+  setTimeout(pollLoop, pollDelay);
 }
 
 // window.pywebview est injecté après le chargement ; on initialise dès que le DOM

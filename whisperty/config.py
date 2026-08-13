@@ -287,6 +287,16 @@ class Config:
             gui=_build(GuiConfig, data.get("gui")),
         )
         cfg.base_dir = p.resolve().parent if p.is_file() else Path.cwd()
+        # Whisper exige du 16 kHz : une autre valeur ferait rééchantillonner le micro
+        # vers un débit que faster-whisper interpréterait QUAND MÊME comme du 16 kHz
+        # (transcription inintelligible, panne difficile à diagnostiquer). On impose,
+        # en avertissant (doctrine corriger-et-avertir).
+        if cfg.audio.samplerate != 16000:
+            logger.warning(
+                "audio.samplerate=%r non supporté : 16000 imposé (exigence Whisper).",
+                cfg.audio.samplerate,
+            )
+            cfg.audio.samplerate = 16000
         return cfg
 
     def resolve(self, relative: Union[str, Path]) -> Path:
@@ -321,6 +331,67 @@ def _build(dc_type, raw):
 _BOOL_TRUE = {"true", "1", "yes", "on", "oui", "vrai"}
 _BOOL_FALSE = {"false", "0", "no", "off", "non", "faux", ""}
 
+# Bornes des champs numériques critiques : (min, max). Une valeur hors bornes est
+# RAMENÉE à la borne la plus proche avec un avertissement (doctrine du module :
+# corriger-et-avertir, jamais bloquant). Ex. vérifié à l'audit : max_duration
+# négatif coupait chaque dictée immédiatement, vad_threshold négatif désactivait
+# l'arrêt automatique sur silence — sans aucun message.
+_FIELD_BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
+    ("AudioConfig", "vad_threshold"): (0.0, 1.0),
+    ("AudioConfig", "silence_duration"): (0.1, 600.0),
+    ("AudioConfig", "max_duration"): (1.0, 3600.0),
+    ("TranscriptionConfig", "beam_size"): (1, 20),
+    ("OutputConfig", "type_delay"): (0.0, 1.0),
+    ("OutputConfig", "restore_delay"): (0.0, 10.0),
+    ("HistoryConfig", "max_entries"): (0, 100_000),
+    ("AIConfig", "timeout"): (1.0, 600.0),
+    ("LiveConfig", "block_duration"): (0.05, 5.0),
+    ("LiveConfig", "max_segment"): (1.0, 300.0),
+    ("LiveConfig", "silence_duration"): (0.1, 30.0),
+    ("LiveConfig", "vad_threshold"): (0.0, 1.0),
+    ("ConferenceConfig", "block_duration"): (0.05, 5.0),
+    ("ConferenceConfig", "max_segment"): (1.0, 300.0),
+    ("ConferenceConfig", "silence_duration"): (0.1, 30.0),
+    ("ConferenceConfig", "vad_threshold"): (0.0, 1.0),
+    ("SpeakerDiarizationConfig", "max_speakers"): (1, 32),
+    ("SpeakerDiarizationConfig", "similarity_threshold"): (0.0, 1.0),
+    ("SpeakerDiarizationConfig", "min_segment"): (0.0, 30.0),
+    ("SummaryConfig", "timeout"): (1.0, 3600.0),
+    ("SummaryConfig", "max_chars"): (500, 1_000_000),
+}
+
+
+def _clamp_field(dc_type, field_obj, value):
+    """Ramène ``value`` dans les bornes déclarées pour ce champ (si bornées)."""
+    bounds = _FIELD_BOUNDS.get((dc_type.__name__, field_obj.name))
+    if bounds is None:
+        return value
+    lo, hi = bounds
+    if lo <= value <= hi:
+        return value
+    clamped = type(value)(min(max(value, lo), hi))
+    logger.warning(
+        "%s.%s : %r hors bornes [%s, %s] ; ramené à %r.",
+        dc_type.__name__, field_obj.name, value, lo, hi, clamped,
+    )
+    return clamped
+
+
+def _coerce_bool(value, default: bool, context: str) -> bool:
+    """Interprète les formes booléennes courantes (« false » quoté YAML n'est pas truthy)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in _BOOL_TRUE:
+            return True
+        if low in _BOOL_FALSE:
+            return False
+    elif isinstance(value, (int, float)):
+        return bool(value)
+    logger.warning("%s : booléen %r non reconnu ; défaut %r utilisé.", context, value, default)
+    return default
+
 
 def _coerce(dc_type, field_obj, value):
     """Coerce ``value`` vers le type du champ (best-effort, repli sur le défaut)."""
@@ -331,30 +402,18 @@ def _coerce(dc_type, field_obj, value):
     # bool d'abord (bool est une sous-classe d'int) : une chaîne YAML quotée « "false" »
     # serait sinon « truthy ». On interprète explicitement les formes courantes.
     if isinstance(default, bool):
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            low = value.strip().lower()
-            if low in _BOOL_TRUE:
-                return True
-            if low in _BOOL_FALSE:
-                return False
-        elif isinstance(value, (int, float)):
-            return bool(value)
-        logger.warning(
-            "%s.%s : booléen %r non reconnu ; défaut %r utilisé.",
-            dc_type.__name__, field_obj.name, value, default,
-        )
-        return default
+        return _coerce_bool(value, default, f"{dc_type.__name__}.{field_obj.name}")
     target = None
     if isinstance(default, int):
         target = int
     elif isinstance(default, float):
         target = float
-    if target is None or isinstance(value, target):
+    if target is None:
         return value
+    if isinstance(value, target):
+        return _clamp_field(dc_type, field_obj, value)
     try:
-        return target(value)
+        return _clamp_field(dc_type, field_obj, target(value))
     except (TypeError, ValueError):
         logger.warning(
             "%s.%s : valeur %r invalide ; défaut %r utilisé.",
@@ -420,4 +479,9 @@ def _build_profiles(raw) -> ProfilesConfig:
             )
             definition.corrections = {}
         definitions.append(definition)
-    return ProfilesConfig(enabled=bool(raw.get("enabled", False)), definitions=definitions)
+    return ProfilesConfig(
+        # _coerce_bool (et non bool()) : « profiles.enabled: "false" » quoté ne doit
+        # pas ACTIVER les profils (cohérence avec la doctrine bool du module).
+        enabled=_coerce_bool(raw.get("enabled", False), False, "profiles.enabled"),
+        definitions=definitions,
+    )

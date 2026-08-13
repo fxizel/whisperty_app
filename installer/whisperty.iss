@@ -79,6 +79,14 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "autostart"; Description: "Lancer Whisperty au démarrage de Windows"; GroupDescription: "Démarrage :"
 
+[InstallDelete]
+; Inno Setup ne supprime JAMAIS de lui-même les fichiers d'une version précédente :
+; sans cette purge, une MAJ (changement de Python, de dépendances) laisserait des
+; DLL/pyd/data périmés dans _internal (bloat, chargements erratiques). SURTOUT PAS
+; {app}\models : il peut contenir un modèle téléchargé par l'utilisateur (bannière
+; du dashboard) vers lequel pointe sa config préservée.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 ; Tout le dossier onedir SAUF les réglages utilisateur (gérés à part, préservés en MAJ).
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "config.yaml,dictionary.txt,whisperty.db,logs\*,transcriptions\*"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -125,6 +133,9 @@ procedure KillRunningApp();
 var
   ResultCode: Integer;
 begin
+  { NB : le kill dur peut interrompre une écriture SQLite (whisperty.db) ; SQLite
+    s'en remet via son journal au prochain démarrage — risque résiduel assumé,
+    préférable à une MAJ qui échoue sur des fichiers verrouillés. }
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#MyAppExeName}', '',
        SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
@@ -138,7 +149,35 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     KillRunningApp();
+    { La valeur Run peut aussi avoir été posée par scripts\install_autostart.ps1
+      (même nom de valeur) SANS la tâche 'autostart' de l'installeur : le
+      uninsdeletevalue de [Registry] ne la couvrirait pas, et une clé orpheline
+      pointerait un exe supprimé à chaque ouverture de session. Suppression
+      inconditionnelle (sans effet si la valeur n'existe pas). }
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#MyAppName}');
+  end;
+  if CurUninstallStep = usPostUninstall then
+  begin
+    { Données préservées par conception (config, dictionnaire, historique,
+      transcriptions, modèles téléchargés — jusqu'à ~1,5 Go) : proposer leur
+      suppression EXPLICITE plutôt que de laisser des orphelins silencieux.
+      Non demandé en mode silencieux (défaut : conserver). }
+    if (not UninstallSilent()) and DirExists(ExpandConstant('{app}')) then
+    begin
+      if MsgBox(
+        'Des données locales de Whisperty subsistent dans :' + #13#10 +
+        ExpandConstant('{app}') + #13#10 + #13#10 +
+        'Elles comprennent vos réglages (config.yaml, dictionnaire), votre historique' + #13#10 +
+        'de transcriptions (whisperty.db), vos transcripts exportés et, le cas échéant,' + #13#10 +
+        'le modèle de reconnaissance téléchargé (jusqu''à ~1,5 Go).' + #13#10 + #13#10 +
+        'Voulez-vous les SUPPRIMER définitivement ?' + #13#10 +
+        '(« Non » les conserve pour une future réinstallation.)',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(ExpandConstant('{app}'), True, True, True);
+    end;
+  end;
 end;
 
 { Détection du runtime Edge WebView2 (Evergreen). Non bloquant : sans lui, Whisperty

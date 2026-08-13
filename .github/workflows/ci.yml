@@ -27,8 +27,9 @@ jobs:
       fail-fast: false
       matrix:
         # Windows = cible de production ; Ubuntu = garde-fou « logique pure » rapide.
+        # 3.14 = version du poste de build (l'exe expédié embarque cet interpréteur).
         os: [windows-latest, ubuntu-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
 
@@ -97,3 +98,78 @@ jobs:
 
       - name: Analyse statique (ruff)
         run: ruff check whisperty/ tests/ --output-format=github
+
+      - name: Garde zéro-réseau (contrainte cardinale)
+        # Matérialise la doctrine du projet : aucune bibliothèque réseau dans
+        # whisperty/ ; urllib (stdlib) autorisé UNIQUEMENT dans ai.py (LLM
+        # localhost, garde is_local_endpoint). Les téléchargements opt-in
+        # (modeldl/cuda) passent par huggingface_hub/pip, pas par un client direct.
+        run: |
+          set -e
+          violations=$(grep -rnE "^[^#]*(import (requests|httpx|aiohttp|websockets?)\b|from (requests|httpx|aiohttp|websockets?)[. ])" whisperty/ || true)
+          if [ -n "$violations" ]; then
+            echo "Bibliothèque réseau interdite détectée :"; echo "$violations"; exit 1
+          fi
+          urllib_hors_ai=$(grep -rln "urllib" whisperty/ | grep -v "whisperty/ai.py" || true)
+          if [ -n "$urllib_hors_ai" ]; then
+            echo "urllib hors de ai.py (à justifier explicitement) :"; echo "$urllib_hors_ai"; exit 1
+          fi
+          echo "Garde zéro-réseau : OK"
+
+  build:
+    name: Build Windows (PyInstaller + installeur)
+    # Valide ce que les tests ne voient pas : la résolution de requirements.txt,
+    # le build PyInstaller (échec dur si un paquet requis manque, cf. whisperty.spec)
+    # et la compilation Inno Setup. Variante -NoModel (pas de modèle bundlé en CI).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Installer les dépendances de production
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build de déploiement (build.ps1 -NoModel)
+        shell: pwsh
+        run: .\scripts\build.ps1 -NoModel
+
+      - name: Vérifier les fichiers critiques du dist
+        shell: pwsh
+        run: |
+          $requis = @(
+            "dist\whisperty\whisperty.exe",
+            "dist\whisperty\config.yaml",
+            "dist\whisperty\dictionary.txt",
+            "dist\whisperty\_internal\whisperty\web\index.html",
+            "dist\whisperty\_internal\whisperty\web\app.js",
+            "dist\whisperty\_internal\whisperty\web\styles.css"
+          )
+          $manquants = $requis | Where-Object { -not (Test-Path $_) }
+          if ($manquants) { throw "Fichiers manquants dans le dist : $($manquants -join ', ')" }
+          # Au moins une DLL ctranslate2 (moteur d'inférence) doit être collectée.
+          if (-not (Get-ChildItem "dist\whisperty\_internal" -Recurse -Filter "ctranslate2*.dll")) {
+            throw "Aucune DLL ctranslate2 dans le dist : le moteur d'inférence manque."
+          }
+          # Le patch d'expédition doit avoir produit des défauts neutres.
+          $cfg = python -c "import yaml,io;d=yaml.safe_load(io.open(r'dist\whisperty\config.yaml',encoding='utf-8'));print(d['transcription']['device'],d['ai']['enabled'],d['conference']['speaker_diarization']['enabled'])"
+          if ($cfg.Trim() -ne "cpu False False") { throw "Défauts d'expédition inattendus : $cfg" }
+          Write-Host "Dist vérifié : OK"
+
+      - name: Compiler l'installeur (Inno Setup)
+        shell: pwsh
+        run: .\scripts\make_installer.ps1
+
+      - name: Publier l'installeur (artefact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisperty-setup-nomodel
+          path: dist/installer/*.exe
+          if-no-files-found: error

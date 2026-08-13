@@ -3,7 +3,8 @@
 
 audio:
   device: null            # null = micro par défaut ; sinon index (voir logs) ou nom
-  samplerate: 16000       # Whisper attend 16 kHz (rééchantillonnage auto sinon)
+  samplerate: 16000       # 16 kHz imposé (exigence Whisper) — toute autre valeur
+                          # est ramenée à 16000 avec un avertissement
   vad_threshold: 0.01     # seuil RMS du VAD simple (silence si niveau < seuil)
   silence_duration: 1.5   # secondes de silence avant arrêt auto (mode toggle)
   max_duration: 60        # garde-fou : durée max d'un enregistrement (s)

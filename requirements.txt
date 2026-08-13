@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Whisperty — dépendances Python (Windows 10/11, Python 3.10–3.12, 64 bits)
+# Whisperty — dépendances Python (Windows 10/11, Python 3.10–3.14, 64 bits ;
+# poste de build vérifié en 3.14, matrice CI 3.10 → 3.14)
 # Tout est local : aucune dépendance ne fait d'appel réseau à l'usage.
 # (faster-whisper télécharge le modèle UNE seule fois ; voir README pour le mode
 #  100 % hors-ligne via transcription.local_files_only.)

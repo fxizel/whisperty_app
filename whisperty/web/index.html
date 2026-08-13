@@ -253,7 +253,7 @@
           <div class="acc-body">
             <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 0 16px;">
               <span style="font-size:13px; color:var(--text-2); font-weight:500;">Activer le post-traitement IA</span>
-              <button class="switch" id="ia-switch"><span class="knob"></span></button>
+              <button class="switch" id="ia-switch" role="switch" aria-checked="false" aria-label="Activer le post-traitement IA"><span class="knob"></span></button>
             </div>
             <div style="display:grid; grid-template-columns:1.4fr 1fr; gap:12px;" id="ia-fields">
               <label style="display:block;"><span class="field-label">Endpoint (local uniquement)</span><input type="text" id="cfg-ia-endpoint" style="font-family:var(--mono); font-size:12.5px;"></label>
@@ -266,7 +266,7 @@
                 <span style="font-size:13px; color:var(--text-2); font-weight:500;">Résumé de fin de session (Live / Conférence)</span>
                 <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">À l'arrêt d'un live ou d'une réunion, résume la conversation via le LLM local ci-dessus (ajouté au transcript et à l'historique).</span>
               </span>
-              <button class="switch" id="resume-switch"><span class="knob"></span></button>
+              <button class="switch" id="resume-switch" role="switch" aria-checked="false" aria-label="Résumé de fin de session (Live / Conférence)"><span class="knob"></span></button>
             </div>
           </div>
         </div>
@@ -282,7 +282,7 @@
                 <span style="font-size:13px; color:var(--text-2); font-weight:500;">Distinction par source</span>
                 <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">Sépare le micro (<em>Moi</em>) et la sortie système (<em>Interlocuteurs</em>) au lieu de mixer les deux voix.</span>
               </span>
-              <button class="switch on" id="conf-distinguish-switch"><span class="knob"></span></button>
+              <button class="switch on" id="conf-distinguish-switch" role="switch" aria-checked="true" aria-label="Distinction par source (Moi / Interlocuteurs)"><span class="knob"></span></button>
             </div>
             <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 0 16px;">
               <span style="display:flex; flex-direction:column; gap:2px;">
@@ -290,7 +290,7 @@
                 <span style="font-size:11.5px; line-height:1.5; color:var(--dim);">Identifie chaque voix (<em>Locuteur 1</em>, <em>Locuteur 2</em>…). 100&nbsp;% local, aucun modèle à télécharger.</span>
                 <span id="conf-diarization-hint" style="display:none; font-size:11px; line-height:1.45; color:var(--dim); margin-top:2px;">Nécessite la distinction par source.</span>
               </span>
-              <button class="switch" id="conf-diarization-switch"><span class="knob"></span></button>
+              <button class="switch" id="conf-diarization-switch" role="switch" aria-checked="false" aria-label="Diarisation des locuteurs (Locuteur 1, Locuteur 2…)"><span class="knob"></span></button>
             </div>
             <div id="conf-diarization-fields" style="display:none; grid-template-columns:1fr 1fr; gap:12px; padding-bottom:8px;">
               <label style="display:block;"><span class="field-label">Nombre max de locuteurs</span>
@@ -317,7 +317,7 @@
                   <span>Hors-ligne garanti</span>
                 </span>
               </span>
-              <button class="switch green on" id="local-switch"><span class="knob"></span></button>
+              <button class="switch green on" id="local-switch" role="switch" aria-checked="true" aria-label="Mode 100 % hors-ligne (local uniquement)"><span class="knob"></span></button>
             </div>
             <p style="margin:6px 0 0; font-size:11.5px; line-height:1.55; color:var(--dim);">Interdit tout accès réseau à HuggingFace (chargement et vérification de révision). Désactiver <em>une seule fois</em> pour télécharger un modèle absent, puis réactiver.</p>
           </div>
@@ -420,9 +420,9 @@
         <div class="hist-list" id="hist-list"></div>
 
         <div class="pager">
-          <button id="hist-prev"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3L4.5 6.5L8 10"/></svg></button>
+          <button id="hist-prev" aria-label="Page précédente"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3L4.5 6.5L8 10"/></svg></button>
           <span class="info">Page <span id="hist-page">1</span> / <span id="hist-pages">1</span></span>
-          <button id="hist-next"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg></button>
+          <button id="hist-next" aria-label="Page suivante"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3l3.5 3.5L5 10"/></svg></button>
         </div>
       </section>
 

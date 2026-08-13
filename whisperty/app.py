@@ -1484,6 +1484,11 @@ class WhispertyApp:
             # Le tray est déjà détaché : on ne peut pas relancer tray.run() ici. On
             # bloque le thread principal jusqu'à « Quitter » pour rester opérationnel.
             logger.exception("Lancement de l'interface fenêtre échoué ; tray seul conservé.")
+            # launch_gui publie _gui AVANT webview.start() : si start() a levé, _gui
+            # pointe une fenêtre jamais démarrée — « Ouvrir Whisperty » et le second
+            # lancement croiraient qu'une fenêtre existe (clic muet, pas de notification).
+            with self._lock:
+                self._gui = None
             self._quit_event.wait()
         return True
 

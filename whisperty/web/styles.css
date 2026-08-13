@@ -50,6 +50,12 @@ html, body {
   user-select: none;
 }
 
+/* Accessibilité / usage : les TRANSCRIPTIONS restent sélectionnables (copier un
+   extrait à la souris) malgré le user-select:none global de l'app ; et le focus
+   clavier des boutons reste visible sur le thème sombre. */
+.last-text, .hist-detail p, .live-line { user-select: text; }
+button:focus-visible { outline: 2px solid rgba(96,165,250,0.6); outline-offset: 2px; }
+
 /* ── Animations (reprises de la maquette) ─────────────────────────────────── */
 @keyframes wsp-wave   { 0%,100% { transform: scaleY(0.12); } 50% { transform: scaleY(1); } }
 @keyframes wsp-pulse  { 0% { box-shadow: 0 0 0 0 var(--ring, rgba(239,68,68,0.55)); }
@@ -451,6 +457,9 @@ input[type=text] {
 }
 .search input { border: none; background: transparent; padding: 0; flex: 1; }
 .search input:focus { outline: none; }
+/* Accessibilité : le focus clavier reste visible sur le CONTENEUR (l'outline natif
+   des champs internes est retiré pour le style, pas la visibilité du focus). */
+.search:focus-within { border-color: rgba(96,165,250,0.55); }
 .hist-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hist-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -535,6 +544,7 @@ input[type=text] {
   color: var(--text-2); font-size: 13px; outline: none;
 }
 .note-row input::placeholder { color: var(--dim); }
+.note-row:focus-within { border-color: rgba(96,165,250,0.55); }
 
 /* ── Locuteurs détectés (UC-18, diarisation) ──────────────────────────────────
    Panneau sous la tuile de transcription, visible seulement en réunion diarisée :
