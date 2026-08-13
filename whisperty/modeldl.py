@@ -182,8 +182,20 @@ class _Downloader:
                 f"Échec du téléchargement : {exc}. Vérifiez la connexion internet "
                 "puis réessayez.",
             )
+            # Repose DÉTERMINISTE de la garde hors-ligne : ne pas attendre un prochain
+            # load() (si l'utilisateur ne dicte plus, la fenêtre resterait ouverte).
+            # L'état n'est plus « running », la repose n'est donc pas différée ; sans
+            # effet pervers si la config est en ligne (le prochain load(False) retire
+            # les variables posées par nous).
+            _set_offline_env(True)
             return
         logger.info("Modèle « %s » téléchargé.", size)
+        # État final publié AVANT l'activation : on_success déclenche un reset/load qui
+        # consulte status() — s'il voyait encore « running », la repose de la garde
+        # hors-ligne serait différée puis jamais rattrapée (chemin rapide de load()).
+        # Un échec d'activation repasse ensuite l'état à « error ».
+        self._set("done", f"Modèle « {size} » installé.")
+        _set_offline_env(True)  # repose déterministe (cf. chemin d'erreur ci-dessus)
         try:
             if on_success is not None:
                 on_success(size, target)
@@ -194,8 +206,6 @@ class _Downloader:
                 "Modèle téléchargé, mais son activation a échoué — redémarrez "
                 "l'application pour le prendre en compte.",
             )
-            return
-        self._set("done", f"Modèle « {size} » installé.")
 
 
 _downloader = _Downloader()

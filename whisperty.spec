@@ -35,6 +35,13 @@ datas, binaries, hiddenimports = [], [], []
 #   loopback  : soundcard (cffi WASAPI)
 #   tray/input: pystray, pynput
 #   fenêtre   : webview (pywebview + DLL WebView2 interop), pythonnet/clr_loader (.NET)
+#
+# Seule la pile FENÊTRE est réellement optionnelle (repli tray seul à l'exécution).
+# Les autres paquets sont importés PARESSEUSEMENT par l'app : l'Analysis de
+# PyInstaller ne détecterait pas leur absence, et un venv de build incomplet
+# produirait un exe « réussi » qui échoue à la première dictée chez l'utilisateur.
+# → échec DUR du build pour tout paquet non optionnel manquant.
+_OPTIONAL_PACKAGES = {"webview", "pythonnet", "clr_loader"}
 for package in (
     "faster_whisper",
     "ctranslate2",
@@ -49,9 +56,14 @@ for package in (
 ):
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
-    except Exception as exc:  # paquet optionnel absent → on continue (repli tray seul)
-        print(f"[whisperty.spec] collect_all({package!r}) ignoré : {exc}")
-        continue
+    except Exception as exc:
+        if package in _OPTIONAL_PACKAGES:  # pile fenêtre absente → repli tray seul
+            print(f"[whisperty.spec] collect_all({package!r}) ignoré (optionnel) : {exc}")
+            continue
+        raise SystemExit(
+            f"[whisperty.spec] Paquet REQUIS introuvable dans le venv de build : "
+            f"{package!r} ({exc}). Installez requirements.txt avant de builder."
+        )
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden

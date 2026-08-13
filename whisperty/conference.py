@@ -174,6 +174,11 @@ class ConferenceTranscriber:
         # la distinction par source. Le worker de diarisation (RE-14) draine _diar_queue.
         self._diar = None
         self._diar_queue: "queue.Queue" = queue.Queue()
+        # Jeton de génération de session : incrémenté à chaque start(). Un worker de
+        # diarisation orphelin (join expiré) porte le jeton de SA session ; ses
+        # écritures tardives sont écartées par _store_and_write (pas de pollution
+        # inter-sessions du transcript, de l'historique ni du flux affiché).
+        self._session_gen = 0
 
     @property
     def diarization_active(self) -> bool:
@@ -181,7 +186,11 @@ class ConferenceTranscriber:
         return self._diar is not None
 
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        # Capture locale : _finish (thread de réunion) peut nuller _thread entre les
+        # deux lectures — sans elle, None.is_alive() lèverait dans l'appelant (pont
+        # GUI ou callback pynput du signet, qui en mourrait pour la session).
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     # -- cycle de vie ----------------------------------------------------------
     def start(self, system_spec: Optional[Union[int, str]] = None) -> bool:
@@ -201,6 +210,7 @@ class ConferenceTranscriber:
         self._fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
         self._diar = self._make_diarizer()
         self._diar_queue = queue.Queue()
+        self._session_gen += 1
         try:
             self._thread = threading.Thread(target=self._run, args=(system_spec,), daemon=True)
             self._thread.start()
@@ -508,7 +518,10 @@ class ConferenceTranscriber:
         """Écrit une ligne dans le transcript (au fil de l'eau), journalise, notifie."""
         with self._note_lock:
             self._write_file_locked(line + "\n")
-        logger.info("Réunion %s", line)
+        # Confidentialité : pas de contenu transcrit dans les logs au niveau INFO
+        # (le transcript et l'historique le conservent déjà) — texte réservé à DEBUG.
+        logger.info("Réunion : segment transcrit (%d caractères).", len(text))
+        logger.debug("Réunion %s", line)
         if self._on_segment is not None:
             try:
                 self._on_segment(line, text)
@@ -551,7 +564,8 @@ class ConferenceTranscriber:
             self._notes.append((elapsed, text))
             self._segments.append((elapsed, "Note", text))
             self._write_file_locked(line + "\n")
-        logger.info("Réunion %s", line)
+        logger.info("Réunion : note ajoutée (%d caractères).", len(text))
+        logger.debug("Réunion %s", line)
         return line
 
     # -- distinction par source (itération 2) / par locuteur (itération 3, UC-18) --
@@ -562,10 +576,19 @@ class ConferenceTranscriber:
         En diarisation (UC-18), un worker dédié (_diar_loop, RE-14) étiquette chaque
         segment par locuteur ; il est démarré ici et joint APRÈS le dernier segment
         (sentinelle), avant _close_transcript/_finish (→ _segments complet)."""
+        # File et diariseur passés en ARGUMENTS (pas de lookup d'attribut dans le
+        # worker) : un worker orphelin d'une session précédente (join expiré) ne peut
+        # ainsi jamais consommer la file — ni la sentinelle — de la session suivante
+        # (même protection que sysbuf dans _system_loop et que la file de live.py).
+        # Le jeton de génération protège l'autre sens : les ÉCRITURES tardives de
+        # l'orphelin sont écartées par _store_and_write.
         diar_thread: Optional[threading.Thread] = None
+        diar_queue = self._diar_queue
         if self._diar is not None:
             diar_thread = threading.Thread(
-                target=self._diar_loop, daemon=True, name="diarization"
+                target=self._diar_loop,
+                args=(diar_queue, self._diar, self._session_gen),
+                daemon=True, name="diarization",
             )
             diar_thread.start()
         try:
@@ -599,24 +622,27 @@ class ConferenceTranscriber:
             # Sentinelle après le dernier segment enfilé ; join avant le retour (comme la
             # file de transcription live) pour que _finish voie tous les segments diarisés.
             if diar_thread is not None:
-                self._diar_queue.put(None)
+                diar_queue.put(None)
                 diar_thread.join(timeout=30.0)
                 if diar_thread.is_alive():
                     logger.warning("Worker de diarisation toujours actif à l'arrêt (backlog).")
 
-    def _diar_loop(self) -> None:
-        """Worker de diarisation (RE-14) : draine _diar_queue, étiquette par locuteur, émet.
+    def _diar_loop(self, diar_queue: "queue.Queue", diar, gen: int) -> None:
+        """Worker de diarisation (RE-14) : draine ``diar_queue``, étiquette par locuteur, émet.
 
         Séparé du fil de capture ET du fil de transcription : l'empreinte vocale +
-        clustering n'y bloquent ni l'un ni l'autre. ``None`` = sentinelle d'arrêt."""
+        clustering n'y bloquent ni l'un ni l'autre. ``None`` = sentinelle d'arrêt.
+        File, diariseur et jeton de génération reçus en arguments (jamais relus sur
+        ``self``) : un worker orphelin ne consomme pas la file de la session suivante
+        et ses écritures tardives sont écartées (``gen`` périmé)."""
         while True:
-            job = self._diar_queue.get()
+            job = diar_queue.get()
             if job is None:
                 break
             source, src_label, audio, stamped = job
-            key = self._diar.identify(audio, source, src_label)
+            key = diar.identify(audio, source, src_label)
             for abs_start, text in stamped:
-                self._store_and_write(abs_start, key, text)
+                self._store_and_write(abs_start, key, text, gen=gen)
 
     def _drain_per_source(self, segmenters: dict, pushed: dict, target: int, final: bool) -> None:
         """Draine chaque source indépendamment (pas d'alignement entre sources)."""
@@ -660,9 +686,21 @@ class ConferenceTranscriber:
             for abs_start, text in stamped:
                 self._store_and_write(abs_start, src_label, text)
 
-    def _store_and_write(self, abs_start: float, key: str, text: str) -> None:
+    def _store_and_write(
+        self, abs_start: float, key: str, text: str, gen: Optional[int] = None,
+    ) -> None:
         """Mémorise un segment (clé de locuteur = ``spk:N`` en diarisation, sinon étiquette
-        de source) et l'écrit au fil de l'eau avec le libellé courant."""
+        de source) et l'écrit au fil de l'eau avec le libellé courant.
+
+        ``gen`` (worker de diarisation) : jeton de génération de la session émettrice.
+        S'il est périmé — worker orphelin d'une session précédente — le segment est
+        écarté au lieu de polluer le transcript/historique de la session courante."""
+        if gen is not None and gen != self._session_gen:
+            logger.warning(
+                "Segment de diarisation tardif écarté (session terminée) : %d caractères.",
+                len(text),
+            )
+            return
         with self._note_lock:
             self._segments.append((abs_start, key, text))
         self._write_line(
@@ -772,36 +810,55 @@ class ConferenceTranscriber:
                 pass
 
     def _finish(self, device_sys: Optional[str], path: Optional[Path]) -> None:
-        # Instantané sous verrou : des notes peuvent encore arriver d'autres threads.
-        with self._note_lock:
-            segments = list(self._segments)
-            notes = sorted(self._notes, key=lambda note: note[0])
-        # Entrelacement chronologique : tri par instant de début (identité en mode mixé,
-        # vrai entrelacement des deux sources — et des notes — en mode distinction).
-        ordered = sorted(segments, key=lambda record: record[0])
-        if self._distinct:
-            # Clé de segment → libellé courant (locuteur diarisé renommable, source, ou Note).
-            body = "\n".join(
-                format_segment_line(start, text, speaker=self._label_for(key))
-                for start, key, text in ordered
-            )
-            # Le fichier final reflète l'ordre chronologique (notes comprises).
-            self._rewrite_sorted(path, ordered, notes)
-        else:
-            # Mode mixé : texte nu, mais les notes gardent leur marqueur (US-10).
-            body = "\n".join(
-                (f"[Note] {text}" if key == "Note" else text)
-                for _start, key, text in ordered
-            )
-        result = {
-            "text": body.strip(),
-            "device": device_sys,
-            "sources": sorted(self._active),
-            "segments": len(segments) - len(notes),
-            "notes": len(notes),
-            "path": str(path) if path is not None else None,
-            "error": self._error,
-        }
+        # TOUTE la construction du résultat est protégée : une exception ici (ex.
+        # RuntimeError si un thread de capture survivant mute _active pendant le
+        # sorted, OSError de _rewrite_sorted) sauterait sinon le callback de fin et
+        # laisserait l'application figée en état CONFERENCE jusqu'au redémarrage.
+        try:
+            # Instantané sous verrou : des notes peuvent encore arriver d'autres threads.
+            with self._note_lock:
+                segments = list(self._segments)
+                notes = sorted(self._notes, key=lambda note: note[0])
+            # _active est muté sans verrou par _system_loop (discard d'une source morte) :
+            # copie défensive avant tri.
+            sources = sorted(set(self._active))
+            # Entrelacement chronologique : tri par instant de début (identité en mode mixé,
+            # vrai entrelacement des deux sources — et des notes — en mode distinction).
+            ordered = sorted(segments, key=lambda record: record[0])
+            if self._distinct:
+                # Clé de segment → libellé courant (locuteur diarisé renommable, source, ou Note).
+                body = "\n".join(
+                    format_segment_line(start, text, speaker=self._label_for(key))
+                    for start, key, text in ordered
+                )
+                # Le fichier final reflète l'ordre chronologique (notes comprises).
+                self._rewrite_sorted(path, ordered, notes)
+            else:
+                # Mode mixé : texte nu, mais les notes gardent leur marqueur (US-10).
+                body = "\n".join(
+                    (f"[Note] {text}" if key == "Note" else text)
+                    for _start, key, text in ordered
+                )
+            result = {
+                "text": body.strip(),
+                "device": device_sys,
+                "sources": sources,
+                "segments": len(segments) - len(notes),
+                "notes": len(notes),
+                "path": str(path) if path is not None else None,
+                "error": self._error,
+            }
+        except Exception:  # noqa: BLE001 — le callback de fin DOIT partir quoi qu'il arrive
+            logger.exception("Construction du résultat de réunion échouée")
+            result = {
+                "text": "",
+                "device": device_sys,
+                "sources": [],
+                "segments": 0,
+                "notes": 0,
+                "path": str(path) if path is not None else None,
+                "error": self._error or "erreur interne à l'arrêt (voir logs)",
+            }
         callback = self._on_finished
         try:
             if callback is not None:

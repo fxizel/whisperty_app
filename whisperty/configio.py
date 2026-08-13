@@ -17,11 +17,18 @@ Confidentialité : pur traitement de fichier local, aucun accès réseau.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 from pathlib import Path
 from typing import Mapping, Union
 
 logger = logging.getLogger(__name__)
+
+# Sérialise les read-modify-write concurrents (écran Configuration et fin de
+# téléchargement du modèle écrivent tous deux config.yaml). Verrou feuille :
+# aucun autre verrou applicatif n'est pris sous lui.
+_WRITE_LOCK = threading.Lock()
 
 # Ligne de section de premier niveau : « section: » sans indentation.
 _SECTION_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(#.*)?$")
@@ -30,6 +37,8 @@ _KEY_RE = re.compile(r"^(\s+)([A-Za-z_][\w-]*):(.*)$")
 
 # Scalaire « simple » pouvant rester sans guillemets en YAML.
 _PLAIN_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+# Texte qui, écrit sans guillemets, serait relu comme un NOMBRE (à citer donc).
+_NUMERIC_RE = re.compile(r"^-?\d+(\.\d*)?$")
 # Mots réservés YAML qu'il faut citer même s'ils paraissent simples.
 _RESERVED = {
     "null", "Null", "NULL", "~", "true", "True", "TRUE", "false", "False", "FALSE",
@@ -51,9 +60,12 @@ def format_scalar(value: object) -> str:
     text = str(value)
     if text == "":
         return '""'
-    if _PLAIN_RE.match(text) and text not in _RESERVED:
+    if _PLAIN_RE.match(text) and text not in _RESERVED and not _NUMERIC_RE.match(text):
         return text
+    # Chaîne citée : les caractères de contrôle doivent être échappés, sinon un
+    # retour à la ligne collé depuis l'UI produirait un fichier invalide.
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = escaped.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
     return f'"{escaped}"'
 
 
@@ -101,14 +113,21 @@ def update_yaml_file(
     ``updates`` : dict de clés pointées (ex. ``{"transcription.model": "small"}``,
     ``{"conference.speaker_diarization.enabled": true}``) vers leur nouvelle valeur
     Python. Les commentaires et l'ordre du fichier sont préservés. Crée le fichier
-    (avec ses sections) s'il est absent.
+    (avec ses sections) s'il est absent. Le résultat est **validé par re-parse** puis
+    écrit **atomiquement** : en cas d'anomalie, ``ValueError`` est levée et le fichier
+    reste intact.
     """
-    p = Path(path)
+    with _WRITE_LOCK:
+        _update_yaml_locked(Path(path), updates)
+
+
+def _update_yaml_locked(p: Path, updates: Mapping[str, object]) -> None:
+    """Corps de :func:`update_yaml_file` (appelé sous ``_WRITE_LOCK``)."""
     by_section, nested = _partition_updates(updates)
     if not by_section and not nested:
         return
 
-    lines = p.read_text(encoding="utf-8").splitlines(keepends=True) if p.is_file() else []
+    lines = p.read_text(encoding="utf-8-sig").splitlines(keepends=True) if p.is_file() else []
     if lines and not lines[-1].endswith("\n"):
         lines[-1] += "\n"
 
@@ -116,6 +135,10 @@ def update_yaml_file(
     applied_nested: set[tuple[str, str, str]] = set()
     current_section: str | None = None
     current_subsection: str | None = None
+    # Indentation réelle du 2e niveau de la section courante : fixée par la 1re clé
+    # rencontrée (2 espaces en pratique, mais un fichier réindenté reste géré au lieu
+    # d'être corrompu par des doublons de clés).
+    level2: int | None = None
     out: list[str] = []
 
     i, n = 0, len(lines)
@@ -125,6 +148,7 @@ def update_yaml_file(
         if sec_match:
             current_section = sec_match.group(1)
             current_subsection = None
+            level2 = None
             out.append(line)
             i += 1
             continue
@@ -132,9 +156,11 @@ def update_yaml_file(
         if key_match and current_section:
             indent, key, rest = key_match.groups()
             indent_len = len(indent)
+            if level2 is None:
+                level2 = indent_len
 
             # Troisième niveau (ex. conference → speaker_diarization → enabled).
-            if indent_len >= 4 and current_subsection:
+            if indent_len > level2 and current_subsection:
                 sec_nested = nested.get(current_section, {}).get(current_subsection, {})
                 tri = (current_section, current_subsection, key)
                 if key in sec_nested and tri not in applied_nested:
@@ -149,7 +175,7 @@ def update_yaml_file(
                     continue
 
             # Second niveau (ex. conference → distinguish_speakers).
-            if indent_len == 2 and current_section in by_section:
+            if indent_len == level2 and current_section in by_section:
                 sec_updates = by_section[current_section]
                 if key in sec_updates and (current_section, key) not in applied:
                     value_part, comment = _split_value_comment(rest)
@@ -164,7 +190,7 @@ def update_yaml_file(
                     continue
 
             # Entrée dans un sous-mapping (ex. « speaker_diarization: »).
-            if indent_len == 2:
+            if indent_len == level2:
                 value_part, _ = _split_value_comment(rest)
                 current_subsection = key if value_part.strip() == "" else None
 
@@ -175,8 +201,55 @@ def update_yaml_file(
     _append_missing(out, by_section, applied)
     _append_nested_missing(out, nested, applied_nested)
 
+    # Filet de sécurité : re-parse et vérifie AVANT d'écrire (fichier intact sinon),
+    # puis écriture atomique (temporaire + os.replace) — jamais de fichier tronqué.
+    content = "".join(out)
+    _verify_updates(content, by_section, nested, p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("".join(out), encoding="utf-8")
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _verify_updates(
+    content: str,
+    by_section: Mapping[str, Mapping[str, object]],
+    nested: Mapping[str, Mapping[str, Mapping[str, object]]],
+    p: Path,
+) -> None:
+    """Vérifie par re-parse que ``content`` porte bien chaque valeur demandée.
+
+    Une mise en forme inattendue du fichier (indentation exotique, clé dupliquée)
+    doit se solder par une erreur franche, jamais par un fichier corrompu ou une
+    valeur silencieusement ignorée.
+    """
+    import yaml  # dépendance déjà présente (config.py)
+
+    try:
+        data = yaml.safe_load(content) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"Écriture de {p} annulée : le résultat ne serait pas un YAML valide ({exc})"
+        ) from exc
+
+    def _check(parts: tuple[str, ...], expected: object) -> None:
+        node: object = data
+        for part in parts[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        actual = node.get(parts[-1]) if isinstance(node, dict) else None
+        if actual != expected:
+            raise ValueError(
+                f"Écriture de {p} annulée : {'.'.join(parts)} vaudrait "
+                f"{actual!r} au lieu de {expected!r} (mise en forme inattendue ?)"
+            )
+
+    for section, kv in by_section.items():
+        for k, v in kv.items():
+            _check((section, k), v)
+    for section, subs in nested.items():
+        for sub, kv in subs.items():
+            for k, v in kv.items():
+                _check((section, sub, k), v)
 
 
 def _consume_block_body(lines: list[str], start: int, out: list[str], key_indent: int) -> int:
@@ -222,11 +295,15 @@ def _append_missing(
         }
         if not missing:
             continue
-        new_lines = [f"  {k}: {format_scalar(v)}\n" for k, v in missing.items()]
         if section in section_line:
+            # Respecte l'indentation réelle des clés existantes de la section
+            # (des sœurs à indentation différente rendraient le YAML invalide).
+            indent = _child_indent(out, section_line[section])
+            new_lines = [f"{indent}{k}: {format_scalar(v)}\n" for k, v in missing.items()]
             insert_at = section_line[section] + 1
             out[insert_at:insert_at] = new_lines
         else:
+            new_lines = [f"  {k}: {format_scalar(v)}\n" for k, v in missing.items()]
             if out and not out[-1].endswith("\n"):
                 out[-1] += "\n"
             out.append(f"{section}:\n")
@@ -282,6 +359,19 @@ def _insert_nested_keys(
     out[insert_at:insert_at] = new_lines
 
 
+def _child_indent(out: list[str], section_idx: int) -> str:
+    """Indentation des clés directes d'une section existante (défaut : 2 espaces)."""
+    i = section_idx + 1
+    while i < len(out):
+        if _SECTION_RE.match(out[i]):
+            break
+        m = _KEY_RE.match(out[i])
+        if m:
+            return m.group(1)
+        i += 1
+    return "  "
+
+
 def _find_section(out: list[str], section: str) -> int | None:
     for i, line in enumerate(out):
         m = _SECTION_RE.match(line)
@@ -293,6 +383,7 @@ def _find_section(out: list[str], section: str) -> int | None:
 def _find_subsection(out: list[str], section_idx: int, subsection: str) -> tuple[int | None, int]:
     """Renvoie (index_ligne, indent) du sous-mapping ``subsection:`` sous ``section``."""
     i = section_idx + 1
+    level2: int | None = None  # indentation réelle du 2e niveau (cf. _update_yaml_locked)
     while i < len(out):
         line = out[i]
         if _SECTION_RE.match(line):
@@ -302,7 +393,9 @@ def _find_subsection(out: list[str], section_idx: int, subsection: str) -> tuple
             i += 1
             continue
         indent, key, rest = m.groups()
-        if len(indent) != 2:
+        if level2 is None:
+            level2 = len(indent)
+        if len(indent) != level2:
             i += 1
             continue
         if key == subsection:

@@ -1385,9 +1385,12 @@ def test_conference_diarization(tmp_path: Path) -> None:
         return np.array([1.0, 0.0], np.float32) if m > 0 else np.array([0.0, 1.0], np.float32)
 
     def drive(ct):
-        """Draine la file de diarisation de façon déterministe (sentinelle + worker synchrone)."""
+        """Draine la file de diarisation de façon déterministe (sentinelle + worker synchrone).
+
+        File, diariseur et jeton de génération passés en arguments, comme le fait
+        _consume_distinct (protection anti-worker-orphelin)."""
         ct._diar_queue.put(None)
-        ct._diar_loop()
+        ct._diar_loop(ct._diar_queue, ct._diar, ct._session_gen)
 
     voice_a = np.full(8000, 0.4, np.float32)
     voice_b = np.full(8000, -0.4, np.float32)
@@ -1651,15 +1654,17 @@ def test_dictionary_edit(tmp_path: Path) -> None:
     assert hot == ["Whisperty", "SCADA", "faster-whisper"]
     assert repl == {"mauvais": "CORRIGE", "whispeurtie": "Whisperty"}
 
-    # Robustesse : entrées vides / corrections incomplètes écartées, doublons dédupliqués.
+    # Robustesse : entrées vides écartées, doublons dédupliqués. Une correction à
+    # remplacement VIDE (« x => », suppression d'un tic) est VALIDE et préservée
+    # (cohérence avec load_dictionary — cf. test_fixes.py).
     update_dictionary_file(dic, [
         {"kind": "hotword", "term": "  "},                       # vide → ignoré
         {"kind": "hotword", "term": "Dup"},
         {"kind": "hotword", "term": "Dup"},                      # doublon → une seule fois
-        {"kind": "correction", "term": "x", "replacement": ""},  # côté droit vide → ignoré
+        {"kind": "correction", "term": "x", "replacement": ""},  # suppression de « x »
     ])
     hot2, repl2 = load_dictionary(dic)
-    assert hot2 == ["Dup"] and repl2 == {}
+    assert hot2 == ["Dup"] and repl2 == {"x": ""}
 
     # Fichier absent : création avec en-tête ; ensure_dictionary_file idempotent.
     fresh = base / "sub" / "new_dico.txt"

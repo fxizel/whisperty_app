@@ -51,6 +51,7 @@ class HotkeyConfig:
 class OutputConfig:
     method: str = "paste"          # paste (Ctrl+V, robuste FR) | type (frappe)
     restore_clipboard: bool = True
+    restore_delay: float = 0.3     # délai (s) avant restauration : laisse la cible coller
     type_delay: float = 0.005
 
 

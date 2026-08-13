@@ -168,24 +168,35 @@ class WhispertyApp:
             logger.exception("Mise à jour de l'icône tray échouée")
 
     def toggle(self) -> None:
-        """Démarre/arrête la dictée. Ignoré pendant PROCESSING ou la transcription live."""
+        """Démarre/arrête la dictée. Ignoré pendant PROCESSING ou la transcription live.
+
+        Lecture de l'état sous verrou, ACTION hors verrou : ``_lock`` est RÉENTRANT
+        (RLock), appeler ``_start_recording``/``_stop_and_process`` depuis le bloc
+        verrouillé les exécuterait verrou tenu malgré leurs ``with`` internes — ce qui
+        neutraliserait le relâchement documenté avant ``recorder.stop()`` (bloquant)
+        et la notification micro hors verrou. Les deux méthodes re-vérifient l'état
+        sous ``_lock`` : un entrelacement entre la lecture et l'action dégrade en
+        no-op bénin (jamais en double démarrage ni double arrêt).
+        """
         with self._lock:
-            if self._state is TrayState.IDLE:
-                self._start_recording()
-            elif self._state is TrayState.RECORDING:
-                self._stop_and_process()
-            elif self._state is TrayState.LIVE:
-                logger.info("Dictée ignorée : transcription live en cours.")
-            elif self._state is TrayState.CONFERENCE:
-                logger.info("Dictée ignorée : réunion en cours.")
-            else:  # PROCESSING
-                logger.info("Dictée ignorée : transcription/chargement en cours.")
+            state = self._state
+        if state is TrayState.IDLE:
+            self._start_recording()
+        elif state is TrayState.RECORDING:
+            self._stop_and_process()
+        elif state is TrayState.LIVE:
+            logger.info("Dictée ignorée : transcription live en cours.")
+        elif state is TrayState.CONFERENCE:
+            logger.info("Dictée ignorée : réunion en cours.")
+        else:  # PROCESSING
+            logger.info("Dictée ignorée : transcription/chargement en cours.")
 
     def _start_recording(self) -> None:
         # Verrou tenu pendant recorder.start() À DESSEIN (asymétrie volontaire avec
         # _stop_and_process) : démarrer le flux atomiquement sous verrou évite qu'un
         # stop concurrent, survenant pendant l'ouverture du périphérique, ne laisse un
         # flux orphelin. Coût : une latence brève (ouverture micro) sur les transitions.
+        mic_error: str | None = None
         with self._lock:
             if self._quitting or self._state is not TrayState.IDLE:
                 return
@@ -193,26 +204,31 @@ class WhispertyApp:
                 self.recorder.start()
             except MicrophoneError as exc:
                 logger.error("%s", exc)
-                self._notify_user(str(exc))
-                return
-            # Capture l'application au premier plan (= cible de l'injection) pour
-            # choisir le profil de contexte. Lecture locale rapide ; None si désactivé.
-            self._active_app = foreground_app() if self.config.profiles.enabled else None
-            self._set_state(TrayState.RECORDING)
-            logger.info("Dictée : enregistrement…")
-            # Surveillance : arrêt auto sur silence (toggle) + garde-fou durée max.
-            try:
-                threading.Thread(target=self._monitor_recording, daemon=True).start()
-            except RuntimeError:
-                # Threads OS épuisés : sans surveillance, on perd l'arrêt auto et le
-                # garde-fou de durée. On annule proprement plutôt que de laisser un
-                # flux micro orphelin en RECORDING (stop() prend _op_lock : ordre _lock→_op_lock respecté).
-                logger.exception("Démarrage de la surveillance impossible ; enregistrement annulé.")
+                # Notification HORS verrou (cf. section Concurrence : _notice_lock est
+                # un verrou feuille, et Shell_NotifyIcon ne doit pas geler la machine
+                # à états) — on capture le message et on notifie après le bloc.
+                mic_error = str(exc)
+            else:
+                # Capture l'application au premier plan (= cible de l'injection) pour
+                # choisir le profil de contexte. Lecture locale rapide ; None si désactivé.
+                self._active_app = foreground_app() if self.config.profiles.enabled else None
+                self._set_state(TrayState.RECORDING)
+                logger.info("Dictée : enregistrement…")
+                # Surveillance : arrêt auto sur silence (toggle) + garde-fou durée max.
                 try:
-                    self.recorder.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-                self._set_state(TrayState.IDLE)
+                    threading.Thread(target=self._monitor_recording, daemon=True).start()
+                except RuntimeError:
+                    # Threads OS épuisés : sans surveillance, on perd l'arrêt auto et le
+                    # garde-fou de durée. On annule proprement plutôt que de laisser un
+                    # flux micro orphelin en RECORDING (stop() prend _op_lock : ordre _lock→_op_lock respecté).
+                    logger.exception("Démarrage de la surveillance impossible ; enregistrement annulé.")
+                    try:
+                        self.recorder.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._set_state(TrayState.IDLE)
+        if mic_error is not None:
+            self._notify_user(mic_error)
 
     def _stop_and_process(self) -> None:
         # Transition d'état sous verrou ; passer à PROCESSING rend tout autre
@@ -290,12 +306,22 @@ class WhispertyApp:
             self._set_model_error(None)  # le chargement a réussi : bannière levée
             text = self.llm.refine(text)  # raffinage LLM local (no-op si désactivé)
             if text:
-                logger.info("Texte : %s", text)
-                self.injector.inject(text)
+                # Confidentialité : le texte dicté ne va PAS dans les logs au niveau
+                # d'expédition (INFO) — longueur seulement, contenu réservé à DEBUG.
+                logger.info("Texte transcrit : %d caractères.", len(text))
+                logger.debug("Texte : %s", text)
+                injected = self.injector.inject(text)
                 self.history.add(
                     text, source="dictée", app=app_name,
                     model=self.config.transcription.model,
                 )
+                if not injected:
+                    # Doctrine notices : un échec PERÇU (rien ne s'insère) doit être
+                    # signalé, pas seulement journalisé.
+                    self._notify_user(
+                        "Injection impossible — le texte est conservé dans l'historique.",
+                        "warn",
+                    )
             else:
                 logger.info("Transcription vide (aucune parole détectée).")
                 # Bénin mais déroutant (« j'ai parlé, rien ne s'insère ») : signalé
@@ -642,13 +668,16 @@ class WhispertyApp:
         with self._lock:
             if self._quitting:
                 return
-            if self._state is not TrayState.IDLE:
-                logger.info("Transcription live ignorée : une autre opération est en cours.")
-                self._notify_user(
-                    "Impossible : une dictée ou transcription est déjà en cours.", "warn"
-                )
-                return
-            self._set_state(TrayState.LIVE)
+            busy = self._state is not TrayState.IDLE
+            if not busy:
+                self._set_state(TrayState.LIVE)
+        if busy:
+            logger.info("Transcription live ignorée : une autre opération est en cours.")
+            # Notification HORS verrou (_notice_lock est un verrou feuille, cf. Concurrence).
+            self._notify_user(
+                "Impossible : une dictée ou transcription est déjà en cours.", "warn"
+            )
+            return
         # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
         self._reset_live_transcript()
         # Démarrage hors verrou ; en cas d'échec immédiat, on rétablit l'état.
@@ -676,14 +705,20 @@ class WhispertyApp:
         # Historiser/copier AVANT de repasser IDLE : la tuile (pilotée par l'état) bascule
         # vers le texte d'historique dès qu'IDLE est vu — l'entrée doit déjà exister, sinon
         # course (last_text() renverrait la transcription précédente).
-        if not error and text:
-            self.history.add(
-                text, source="live", app=device, model=self.config.transcription.model
-            )
-            self.injector.copy_to_clipboard(text)
-        with self._lock:
-            if self._state is TrayState.LIVE:
-                self._set_state(TrayState.IDLE)
+        # try/finally : le retour IDLE est GARANTI même si une étape échoue, sinon
+        # l'application resterait figée en LIVE jusqu'au redémarrage.
+        try:
+            if not error and text:
+                self.history.add(
+                    text, source="live", app=device, model=self.config.transcription.model
+                )
+                self.injector.copy_to_clipboard(text)
+        except Exception:  # noqa: BLE001 — la session est terminée, rien ne doit bloquer
+            logger.exception("Archivage de la session live échoué")
+        finally:
+            with self._lock:
+                if self._state is TrayState.LIVE:
+                    self._set_state(TrayState.IDLE)
         if error:
             self._notify_user(f"Transcription live arrêtée : {error}")
         elif text:
@@ -712,13 +747,16 @@ class WhispertyApp:
         with self._lock:
             if self._quitting:
                 return
-            if self._state is not TrayState.IDLE:
-                logger.info("Réunion ignorée : une autre opération est en cours.")
-                self._notify_user(
-                    "Impossible : une dictée ou transcription est déjà en cours.", "warn"
-                )
-                return
-            self._set_state(TrayState.CONFERENCE)
+            busy = self._state is not TrayState.IDLE
+            if not busy:
+                self._set_state(TrayState.CONFERENCE)
+        if busy:
+            logger.info("Réunion ignorée : une autre opération est en cours.")
+            # Notification HORS verrou (_notice_lock est un verrou feuille, cf. Concurrence).
+            self._notify_user(
+                "Impossible : une dictée ou transcription est déjà en cours.", "warn"
+            )
+            return
         # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
         self._reset_live_transcript()
         # Rappel consentement (tout reste local).
@@ -749,13 +787,18 @@ class WhispertyApp:
         sources = ", ".join(result.get("sources", [])) or "aucune"
         # Historiser AVANT de repasser IDLE (cf. _on_live_finished : évite la course
         # tuile/last_text()). Le texte final est la version triée (entrelacement).
-        if not error and text:
-            self.history.add(
-                text, source="réunion", app=device, model=self.config.transcription.model
-            )
-        with self._lock:
-            if self._state is TrayState.CONFERENCE:
-                self._set_state(TrayState.IDLE)
+        # try/finally : le retour IDLE est GARANTI même si l'archivage échoue.
+        try:
+            if not error and text:
+                self.history.add(
+                    text, source="réunion", app=device, model=self.config.transcription.model
+                )
+        except Exception:  # noqa: BLE001 — la session est terminée, rien ne doit bloquer
+            logger.exception("Archivage de la réunion échoué")
+        finally:
+            with self._lock:
+                if self._state is TrayState.CONFERENCE:
+                    self._set_state(TrayState.IDLE)
         notes = result.get("notes", 0)
         extra = f", {notes} note(s)" if notes else ""
         if error:

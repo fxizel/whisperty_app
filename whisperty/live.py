@@ -123,7 +123,11 @@ class LiveTranscriber:
         self._notes: list[tuple[str, str]] = []  # (horodatage HH:MM:SS, texte)
 
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        # Capture locale : _finish (thread live) peut nuller _thread entre les deux
+        # lectures — sans elle, None.is_alive() lèverait dans l'appelant (pont GUI ou
+        # callback pynput du signet, qui en mourrait pour la session).
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     # -- cycle de vie ----------------------------------------------------------
     def start(self, device_spec: Optional[Union[int, str]] = None) -> bool:
@@ -253,7 +257,10 @@ class LiveTranscriber:
         with self._note_lock:
             self._segments.append(text)
             self._write_locked(f"[{stamp}] {text}\n")
-        logger.info("Live [%s] %s", stamp, text)
+        # Confidentialité : pas de contenu transcrit dans les logs au niveau INFO
+        # (le transcript et l'historique le conservent déjà) — texte réservé à DEBUG.
+        logger.info("Live [%s] segment transcrit (%d caractères).", stamp, len(text))
+        logger.debug("Live [%s] %s", stamp, text)
         if self._on_segment is not None:
             try:
                 self._on_segment(stamp, text)
@@ -293,7 +300,8 @@ class LiveTranscriber:
             self._notes.append((stamp, text))
             self._segments.append(line)
             self._write_locked(f"[{stamp}] {line}\n")
-        logger.info("Live [%s] %s", stamp, line)
+        logger.info("Live [%s] note ajoutée (%d caractères).", stamp, len(text))
+        logger.debug("Live [%s] %s", stamp, line)
         return line
 
     # -- transcript ------------------------------------------------------------

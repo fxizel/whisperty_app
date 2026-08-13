@@ -121,8 +121,9 @@ class History:
                 )
                 self._prune(conn)
                 conn.commit()
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             # L'archivage ne doit jamais interrompre le pipeline de dictée.
+            # OSError couvre l'échec du mkdir de _connect (dossier en lecture seule…).
             logger.warning("Écriture dans l'historique échouée.", exc_info=True)
 
     def _prune(self, conn: sqlite3.Connection) -> None:
@@ -149,7 +150,7 @@ class History:
                     "FROM transcriptions ORDER BY id DESC LIMIT ?",
                     (max(0, int(limit)),),
                 ).fetchall()
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             logger.warning("Lecture de l'historique échouée.", exc_info=True)
             return []
         return [
@@ -179,7 +180,7 @@ class History:
                 conn = self._connect()
                 conn.execute("DELETE FROM transcriptions WHERE id = ?", (entry_id,))
                 conn.commit()
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             logger.warning("Suppression d'une entrée d'historique échouée.", exc_info=True)
 
     def clear(self) -> None:
@@ -191,7 +192,7 @@ class History:
                 conn = self._connect()
                 conn.execute("DELETE FROM transcriptions")
                 conn.commit()
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
             logger.warning("Purge de l'historique échouée.", exc_info=True)
 
     def close(self) -> None:

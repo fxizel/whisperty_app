@@ -12,6 +12,7 @@ Format de ``dictionary.txt`` :
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Iterable, Mapping, Union
@@ -29,6 +30,41 @@ _DEFAULT_HEADER = (
 )
 
 
+def _read_text_lenient(p: Path) -> str:
+    """Lit un fichier dictionnaire en UTF-8 (BOM toléré), repli cp1252.
+
+    Le dictionnaire est édité à la main : un enregistrement en ANSI/cp1252 (courant
+    sous Windows avec des accents) ou un fichier illisible ne doivent JAMAIS faire
+    échouer le chargement — et encore moins le démarrage de l'application. Toute
+    erreur est journalisée et dégrade en contenu vide.
+    """
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        logger.error("Dictionnaire illisible (%s) : %s", p, exc)
+        return ""
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        logger.warning(
+            "Dictionnaire non UTF-8 (%s) : lecture en cp1252. "
+            "Réenregistrez-le en UTF-8 pour éviter cet avertissement.", p,
+        )
+        return data.decode("cp1252", errors="replace")
+
+
+def _write_text_atomic(p: Path, content: str) -> None:
+    """Écrit ``content`` de façon atomique (fichier temporaire + ``os.replace``).
+
+    Garantit la promesse « échec d'écriture = fichier intact » : un disque plein ou
+    une coupure ne laisse jamais un dictionnaire tronqué.
+    """
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, p)
+
+
 def load_dictionary(path: Union[str, Path]) -> tuple[list[str], dict[str, str]]:
     """Charge ``(hotwords, replacements)`` depuis le fichier dictionnaire.
 
@@ -41,7 +77,7 @@ def load_dictionary(path: Union[str, Path]) -> tuple[list[str], dict[str, str]]:
         logger.info("Dictionnaire introuvable : %s", p)
         return hotwords, replacements
 
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    for raw in _read_text_lenient(p).splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -104,10 +140,11 @@ def _entry_key(kind: str, term: str, replacement: str):
     ex. ``HTA``). Renvoie ``None`` pour une entrée invalide (à ignorer).
     """
     term = (term or "").strip()
-    replacement = (replacement or "").strip()
     if kind == "correction":
-        if not term or not replacement:
-            return None  # une correction exige ses deux côtés
+        # Le remplacement peut être VIDE (« euh => » supprime un tic de langage) :
+        # load_dictionary l'accepte, l'édition assistée doit donc le préserver.
+        if not term:
+            return None
         return ("correction", term.lower())
     if not term:
         return None
@@ -117,7 +154,8 @@ def _entry_key(kind: str, term: str, replacement: str):
 def _render_entry(kind: str, term: str, replacement: str) -> str:
     """Sérialise une entrée en ligne de dictionnaire (sans le saut de ligne final)."""
     if kind == "correction":
-        return f"{term.strip()} => {replacement.strip()}"
+        right = replacement.strip()
+        return f"{term.strip()} => {right}" if right else f"{term.strip()} =>"
     return term.strip()
 
 
@@ -132,7 +170,7 @@ def parse_entries(path: Union[str, Path]) -> list[dict]:
     if not p.is_file():
         return []
     entries: list[dict] = []
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    for raw in _read_text_lenient(p).splitlines():
         kind, term, repl = _line_kind(raw)
         if kind in ("hotword", "correction") and _entry_key(kind, term, repl) is not None:
             entries.append({"kind": kind, "term": term, "replacement": repl})
@@ -180,7 +218,7 @@ def update_dictionary_file(
     p = Path(path)
     order, rendered = _normalize_desired(entries)
 
-    lines = p.read_text(encoding="utf-8").splitlines(keepends=True) if p.is_file() else []
+    lines = _read_text_lenient(p).splitlines(keepends=True) if p.is_file() else []
     out: list[str] = []
     emitted: set[tuple] = set()
 
@@ -210,8 +248,7 @@ def update_dictionary_file(
     if not out:  # dictionnaire vidé de toute entrée : ne pas laisser un fichier vide sans repère.
         out.append(_DEFAULT_HEADER)
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("".join(out), encoding="utf-8")
+    _write_text_atomic(p, "".join(out))
 
 
 def ensure_dictionary_file(path: Union[str, Path]) -> Path:
@@ -222,6 +259,5 @@ def ensure_dictionary_file(path: Union[str, Path]) -> Path:
     """
     p = Path(path)
     if not p.is_file():
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(_DEFAULT_HEADER, encoding="utf-8")
+        _write_text_atomic(p, _DEFAULT_HEADER)
     return p

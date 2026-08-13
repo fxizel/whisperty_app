@@ -108,9 +108,11 @@ Copy-Item "$root\dictionary.txt" $appDir -Force
 # (repli CPU avec avertissement à chaque chargement) ni serveur LLM (tentative +
 # échec journalisé à chaque dictée, notification « résumé indisponible » à chaque
 # session). On expédie donc : CPU, IA locale et résumé désactivés (opt-in documenté,
-# réactivables depuis l'écran Configuration). Commentaires du YAML préservés.
+# réactivables depuis l'écran Configuration). La diarisation est également remise
+# à son défaut opt-in (CO-18 : « Locuteur N » ne doit s'activer que sur choix
+# explicite de l'utilisateur). Commentaires du YAML préservés.
 Invoke-Checked {
-    & $py -c "from whisperty.configio import update_yaml_file; update_yaml_file(r'$appDir\config.yaml', {'transcription.device':'cpu','transcription.compute_type':'int8','ai.enabled':False,'summary.enabled':False})"
+    & $py -c "from whisperty.configio import update_yaml_file; update_yaml_file(r'$appDir\config.yaml', {'transcription.device':'cpu','transcription.compute_type':'int8','ai.enabled':False,'summary.enabled':False,'conference.speaker_diarization.enabled':False})"
 } "patch config (défauts d'expédition)"
 
 # --- 7. Modèle Whisper ---------------------------------------------------------
@@ -121,7 +123,15 @@ if (-not $NoModel) {
     } else {
         # Lit transcription.model ; ne bundle que si c'est un nom de taille (pas un chemin).
         $cfgModel = (& $py -c "import yaml,io;d=yaml.safe_load(io.open(r'$root\config.yaml',encoding='utf-8')) or {};print((d.get('transcription') or {}).get('model','medium'))").Trim()
-        if ($cfgModel -and ($cfgModel -notmatch '[\\/]')) { $bundleModel = $cfgModel }
+        if ($cfgModel -and ($cfgModel -notmatch '[\\/]')) {
+            $bundleModel = $cfgModel
+        } else {
+            # transcription.model est un CHEMIN : basculer silencieusement en « sans
+            # modèle + local_files_only:false » violerait la doctrine hors-ligne par
+            # défaut. On exige un choix explicite.
+            throw ("transcription.model du dépôt est un chemin (« $cfgModel »), impossible d'en déduire la taille à bundler. " +
+                   "Relancez avec -Model <taille> (bundling hors-ligne) ou -NoModel (téléchargement au 1er lancement).")
+        }
     }
 }
 

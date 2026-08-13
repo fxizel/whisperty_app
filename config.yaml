@@ -39,6 +39,8 @@ hotkey:
 output:
   method: paste           # paste (presse-papiers + Ctrl+V, robuste FR) | type (frappe)
   restore_clipboard: true # restaurer le contenu du presse-papiers après collage
+  restore_delay: 0.3      # délai (s) avant restauration : laisse l'app cible coller
+                          # (augmenter sur machine lente/RDP si l'ancien texte revient)
   type_delay: 0.005       # délai entre frappes (méthode "type")
 
 dictionary:

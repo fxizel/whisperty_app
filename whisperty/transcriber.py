@@ -135,6 +135,30 @@ _offline_env_set: set[str] = set()
 _OFFLINE_ENV_VARS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
 
+def _model_download_running() -> bool:
+    """True si un téléchargement de modèle opt-in (``modeldl``) est en cours.
+
+    Reposer la garde hors-ligne pendant ce téléchargement le ferait échouer en plein
+    vol (huggingface_hub consulte ``HF_HUB_OFFLINE`` à chaque requête) — scénario
+    réel : l'utilisateur dicte pendant que la bannière télécharge, le modèle absent
+    déclenche ``load()`` qui reposerait la garde. On ne consulte ``modeldl`` que s'il
+    est déjà importé (aucun cycle, aucun coût sinon).
+
+    Ordre de verrouillage : appelé sous ``Transcriber._load_lock`` ; ``modeldl.status()``
+    prend brièvement ``_Downloader._lock`` (feuille) → ordre ``_load_lock`` →
+    ``downloader._lock``, JAMAIS l'inverse (``modeldl._run`` appelle
+    ``_set_offline_env(False)`` hors de son verrou, et ce chemin ne consulte pas
+    ``status()``).
+    """
+    mod = sys.modules.get(f"{__package__}.modeldl") if __package__ else None
+    if mod is None:
+        return False
+    try:
+        return mod.status().get("state") == "running"
+    except Exception:  # noqa: BLE001 — simple consultation best-effort
+        return False
+
+
 def _set_offline_env(offline: bool) -> None:
     """(Dé)pose les variables hors-ligne Hugging Face selon ``local_files_only``.
 
@@ -146,6 +170,12 @@ def _set_offline_env(offline: bool) -> None:
     valeurs à l'import (constantes de module) : on resynchronise donc aussi le module
     s'il est déjà chargé (best-effort, structure interne susceptible de changer).
     """
+    if offline and _model_download_running():
+        # Un téléchargement opt-in a levé la garde : ne pas la reposer sous ses pieds.
+        # Elle sera reposée par le chargement du modèle une fois celui-ci en place
+        # (_on_model_downloaded → reset → load), fenêtre « en ligne » déjà assumée.
+        logger.info("Garde hors-ligne différée : téléchargement du modèle en cours.")
+        return
     if offline:
         for var in _OFFLINE_ENV_VARS:
             if var not in os.environ:

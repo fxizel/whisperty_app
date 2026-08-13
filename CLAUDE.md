@@ -116,6 +116,24 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   `quit()` met `_quitting=True` PUIS `window.destroy()` (débloque `start()` ; `on_closing` autorise
   alors la fermeture, sinon il masque dans le tray). `_quit_event` débloque le thread principal si la
   fenêtre n'a pas pu démarrer après un tray déjà détaché.
+- **`toggle()` dispatch HORS verrou** : `_lock` est RÉENTRANT (RLock) — appeler
+  `_start_recording`/`_stop_and_process` depuis le bloc verrouillé de `toggle()` les exécuterait
+  verrou tenu malgré leurs `with` internes (relâchement avant `recorder.stop()` neutralisé,
+  notification micro sous verrou). `toggle()` lit donc l'état sous `_lock` puis agit hors verrou ;
+  les deux méthodes re-vérifient l'état sous `_lock` (entrelacement = no-op bénin). Même doctrine
+  pour les notices : `_start_recording` renvoie son message micro après le bloc, `start_live`/
+  `start_conference` notifient via un drapeau `busy` hors verrou.
+- **Verrous utilitaires (V2)** : `configio._WRITE_LOCK` sérialise les read-modify-write de
+  `config.yaml` (écran Configuration + fin de téléchargement du modèle) — verrou **feuille**.
+  `Transcriber._load_lock`, `modeldl._Downloader._lock` et `cuda._Installer._lock` sont des
+  feuilles effectives. Seul ordre inter-modules : `_load_lock` → `downloader._lock` (via
+  `transcriber._model_download_running`, qui diffère la repose de la garde hors-ligne pendant un
+  téléchargement) — JAMAIS l'inverse (`modeldl._run` appelle `_set_offline_env` hors de son
+  verrou, et publie son état final AVANT `on_success` puis repose la garde de façon déterministe).
+- **Diarisation — jeton de génération (V2)** : `_session_gen` (incrémenté par `start()`) est passé
+  au worker `_diar_loop` avec la file et le diariseur (arguments, jamais relus sur `self`) ;
+  `_store_and_write` écarte les écritures d'un worker orphelin (jeton périmé) — ni la file, ni la
+  sentinelle, ni le transcript de la session suivante ne peuvent être pollués.
 
 ## Décisions d'architecture à respecter
 
