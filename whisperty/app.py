@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import modeldl
+from . import feedback, modeldl
 from .ai import LocalLLM
 from .conference import ConferenceTranscriber
 from .config import Config
@@ -214,6 +214,8 @@ class WhispertyApp:
                 self._active_app = foreground_app() if self.config.profiles.enabled else None
                 self._set_state(TrayState.RECORDING)
                 logger.info("Dictée : enregistrement…")
+                # Retour sonore (Q-05) : non bloquant, sans verrou — sûr sous _lock.
+                feedback.play("start", self.config.audio.sound_feedback)
                 # Surveillance : arrêt auto sur silence (toggle) + garde-fou durée max.
                 try:
                     threading.Thread(target=self._monitor_recording, daemon=True).start()
@@ -237,6 +239,7 @@ class WhispertyApp:
             if self._state is not TrayState.RECORDING:
                 return
             self._set_state(TrayState.PROCESSING)
+        feedback.play("stop", self.config.audio.sound_feedback)
         # Verrou RELÂCHÉ avant l'arrêt PortAudio (bloquant) : ne pas geler le thread
         # écouteur clavier ni les autres transitions. recorder.stop() est thread-safe.
         try:

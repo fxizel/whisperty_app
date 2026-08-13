@@ -17,7 +17,7 @@ import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Union
 
@@ -44,6 +44,7 @@ class History:
         path: Union[str, Path],
         max_entries: int = 200,
         enabled: bool = True,
+        max_age_days: int = 0,
     ) -> None:
         self.path = Path(path)
         # Robustesse : une valeur mal typée (config.yaml manuel) ne doit pas faire
@@ -53,9 +54,17 @@ class History:
         except (TypeError, ValueError):
             logger.warning("history.max_entries invalide (%r) ; 200 utilisé.", max_entries)
             self.max_entries = 200
+        # Rétention temporelle (RGPD) : 0 = illimité (défaut, comportement historique).
+        try:
+            self.max_age_days = max(0, int(max_age_days))
+        except (TypeError, ValueError):
+            logger.warning("history.max_age_days invalide (%r) ; 0 (illimité) utilisé.", max_age_days)
+            self.max_age_days = 0
         self.enabled = enabled
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
+        # Index plein texte FTS5 disponible ? (déterminé à la connexion ; repli LIKE sinon)
+        self._fts_ok = False
         # Une fois fermé (à l'arrêt de l'app), add()/recent() deviennent des no-op :
         # un écrivain tardif (thread live) ne doit pas ROUVRIR la connexion après close().
         self._closed = False
@@ -68,6 +77,7 @@ class History:
             path=config.resolve(hc.path),
             max_entries=hc.max_entries,
             enabled=hc.enabled,
+            max_age_days=getattr(hc, "max_age_days", 0),
         )
 
     # -- connexion (paresseuse) ------------------------------------------------
@@ -95,8 +105,48 @@ class History:
                 )
                 """
             )
+            self._fts_ok = self._ensure_fts(self._conn)
+            # Purge temporelle dès l'ouverture : les entrées expirées disparaissent
+            # même si aucune nouvelle dictée n'est archivée ensuite.
+            self._prune(self._conn)
             self._conn.commit()
         return self._conn
+
+    def _ensure_fts(self, conn: sqlite3.Connection) -> bool:
+        """Crée (si absent) l'index plein texte FTS5, synchronisé par triggers.
+
+        FTS5 est compilé dans le sqlite3 des builds CPython (Windows comme CI Linux) ;
+        en son absence, renvoie False et :meth:`search` retombe sur un LIKE.
+        ``remove_diacritics 2`` : « reunion » retrouve « réunion ».
+        """
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS transcriptions_fts USING fts5("
+                "text, content='transcriptions', content_rowid='id', "
+                "tokenize='unicode61 remove_diacritics 2')"
+            )
+            conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS transcriptions_fts_ai "
+                "AFTER INSERT ON transcriptions BEGIN "
+                "INSERT INTO transcriptions_fts(rowid, text) VALUES (new.id, new.text); END"
+            )
+            conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS transcriptions_fts_ad "
+                "AFTER DELETE ON transcriptions BEGIN "
+                "INSERT INTO transcriptions_fts(transcriptions_fts, rowid, text) "
+                "VALUES ('delete', old.id, old.text); END"
+            )
+            # Base créée AVANT l'index (mise à jour de l'app) : reconstruction unique
+            # si l'index est en retard sur la table (idempotent, coût minime à l'échelle
+            # de max_entries).
+            n_rows = conn.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
+            n_fts = conn.execute("SELECT COUNT(*) FROM transcriptions_fts").fetchone()[0]
+            if n_fts != n_rows:
+                conn.execute("INSERT INTO transcriptions_fts(transcriptions_fts) VALUES ('rebuild')")
+            return True
+        except sqlite3.Error:
+            logger.warning("FTS5 indisponible : la recherche retombera sur LIKE.", exc_info=True)
+            return False
 
     # -- écriture --------------------------------------------------------------
     def add(
@@ -127,15 +177,24 @@ class History:
             logger.warning("Écriture dans l'historique échouée.", exc_info=True)
 
     def _prune(self, conn: sqlite3.Connection) -> None:
-        """Conserve uniquement les ``max_entries`` transcriptions les plus récentes."""
-        if self.max_entries <= 0:
-            return
-        conn.execute(
-            "DELETE FROM transcriptions WHERE id NOT IN ("
-            "  SELECT id FROM transcriptions ORDER BY id DESC LIMIT ?"
-            ")",
-            (self.max_entries,),
-        )
+        """Applique les deux rétentions : nombre max d'entrées et âge max (RGPD).
+
+        Les suppressions passent par DELETE, donc les triggers tiennent l'index FTS
+        à jour. ``timestamp`` est un isoformat local : la comparaison lexicale suffit
+        (le seuil est calculé en Python, même horloge que l'écriture).
+        """
+        if self.max_entries > 0:
+            conn.execute(
+                "DELETE FROM transcriptions WHERE id NOT IN ("
+                "  SELECT id FROM transcriptions ORDER BY id DESC LIMIT ?"
+                ")",
+                (self.max_entries,),
+            )
+        if self.max_age_days > 0:
+            cutoff = (datetime.now() - timedelta(days=self.max_age_days)).isoformat(
+                timespec="seconds"
+            )
+            conn.execute("DELETE FROM transcriptions WHERE timestamp < ?", (cutoff,))
 
     # -- lecture ---------------------------------------------------------------
     def recent(self, limit: int = 10) -> list[HistoryEntry]:
@@ -165,6 +224,57 @@ class History:
         """Texte de la dernière transcription, ou ``None`` si l'historique est vide."""
         entries = self.recent(1)
         return entries[0].text if entries else None
+
+    def search(self, query: str, limit: int = 200) -> list[HistoryEntry]:
+        """Recherche plein texte dans l'historique, plus récentes d'abord.
+
+        FTS5 quand disponible (mots entiers et préfixes, accents ignorés — « reunion »
+        retrouve « réunion ») ; repli sous-chaîne LIKE sinon. Never-fail : requête
+        vide, historique désactivé/fermé ou erreur → liste vide.
+        """
+        terms = str(query or "").split()
+        if not terms or not self.enabled or self._closed:
+            return []
+        try:
+            limit = max(0, int(limit))
+        except (TypeError, ValueError):
+            limit = 200
+        try:
+            with self._lock:
+                conn = self._connect()
+                if self._fts_ok:
+                    # Chaque terme cité (neutralise la syntaxe FTS : OR, NEAR, parenthèses…)
+                    # et en recherche par préfixe — « budg » trouve « budget ».
+                    match = " ".join(
+                        f'"{t}"*' for t in (t.replace('"', "") for t in terms) if t
+                    )
+                    if not match:
+                        return []
+                    rows = conn.execute(
+                        "SELECT t.id, t.timestamp, t.text, t.source, t.app, t.model "
+                        "FROM transcriptions_fts f JOIN transcriptions t ON t.id = f.rowid "
+                        "WHERE transcriptions_fts MATCH ? ORDER BY t.id DESC LIMIT ?",
+                        (match, limit),
+                    ).fetchall()
+                else:
+                    like = "%" + " ".join(terms).replace("\\", "\\\\").replace(
+                        "%", "\\%"
+                    ).replace("_", "\\_") + "%"
+                    rows = conn.execute(
+                        "SELECT id, timestamp, text, source, app, model FROM transcriptions "
+                        "WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
+                        (like, limit),
+                    ).fetchall()
+        except (sqlite3.Error, OSError):
+            logger.warning("Recherche dans l'historique échouée.", exc_info=True)
+            return []
+        return [
+            HistoryEntry(
+                id=r["id"], timestamp=r["timestamp"], text=r["text"],
+                source=r["source"], app=r["app"], model=r["model"],
+            )
+            for r in rows
+        ]
 
     def delete(self, entry_id: int) -> None:
         """Supprime une transcription par son ``id``. No-op si désactivé/fermé/absent."""

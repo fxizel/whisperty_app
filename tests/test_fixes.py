@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import sys
 import types
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -232,7 +233,112 @@ def test_history_survit_a_oserror(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# 5) Garde hors-ligne différée pendant un téléchargement de modèle
+# 5) Retour sonore (feedback.py) — Q-05
+# =============================================================================
+def test_feedback_joue_via_winsound() -> None:
+    """La séquence passe par winsound.Beep (doublure enregistreuse)."""
+    from whisperty import feedback
+
+    calls: list = []
+    fake = types.ModuleType("winsound")
+    fake.Beep = lambda freq, dur: calls.append((freq, dur))
+    previous = sys.modules.get("winsound")
+    sys.modules["winsound"] = fake
+    try:
+        feedback._play_tones(feedback._TONES["start"])
+        assert calls == list(feedback._TONES["start"])
+    finally:
+        if previous is not None:
+            sys.modules["winsound"] = previous
+        else:
+            sys.modules.pop("winsound", None)
+
+
+def test_feedback_sans_winsound_ni_active() -> None:
+    """winsound absent (CI Linux) = silence sans exception ; désactivé/inconnu = no-op."""
+    from whisperty import feedback
+
+    previous = sys.modules.get("winsound")
+    sys.modules["winsound"] = None  # simule le paquet absent (ImportError)
+    try:
+        feedback._play_tones(feedback._TONES["stop"])  # ne doit pas lever
+    finally:
+        if previous is not None:
+            sys.modules["winsound"] = previous
+        else:
+            sys.modules.pop("winsound", None)
+    feedback.play("start", enabled=False)  # désactivé : aucun thread
+    feedback.play("évènement-inconnu")     # inconnu : no-op
+
+
+# =============================================================================
+# 6) Historique : recherche plein texte (FTS5) et rétention temporelle (RGPD)
+# =============================================================================
+def test_history_recherche_plein_texte(tmp_path: Path) -> None:
+    """FTS5 : accents ignorés, recherche par préfixe, syntaxe hostile neutralisée."""
+    from whisperty.history import History
+
+    hist = History(path=tmp_path / "h.db", max_entries=100, enabled=True)
+    hist.add("Le budget prévisionnel du réseau électrique")
+    hist.add("Compte rendu de la réunion sécurité")
+    hist.add("Note sans rapport")
+
+    # « reunion » sans accent retrouve « réunion » (remove_diacritics).
+    assert [e.text for e in hist.search("reunion")] == ["Compte rendu de la réunion sécurité"]
+    # Préfixe : « budg » trouve « budget ».
+    assert len(hist.search("budg")) == 1
+    # Multi-termes = ET implicite.
+    assert len(hist.search("réseau budget")) == 1
+    # Requête vide ou syntaxe FTS hostile : jamais d'exception.
+    assert hist.search("") == []
+    assert hist.search('") OR (" *') == []
+    # Les suppressions tiennent l'index à jour.
+    hist.clear()
+    assert hist.search("budget") == []
+    hist.close()
+
+
+def test_history_purge_temporelle(tmp_path: Path) -> None:
+    """max_age_days purge les entrées expirées (et l'index FTS suit)."""
+    from whisperty.history import History
+
+    hist = History(path=tmp_path / "h.db", max_entries=100, enabled=True, max_age_days=30)
+    old_stamp = (datetime.now() - timedelta(days=90)).isoformat(timespec="seconds")
+    # Entrée antidatée injectée directement (add() horodate toujours à maintenant) ;
+    # l'INSERT direct déclenche aussi le trigger FTS.
+    with hist._lock:
+        conn = hist._connect()
+        conn.execute(
+            "INSERT INTO transcriptions (timestamp, text) VALUES (?, ?)",
+            (old_stamp, "très ancienne transcription"),
+        )
+        conn.commit()
+    hist.add("récente")  # déclenche la purge
+    assert [e.text for e in hist.recent(10)] == ["récente"]
+    assert hist.search("ancienne") == []
+    hist.close()
+
+
+def test_history_max_age_zero_conserve_tout(tmp_path: Path) -> None:
+    """Défaut max_age_days=0 : aucune purge temporelle (comportement historique)."""
+    from whisperty.history import History
+
+    hist = History(path=tmp_path / "h.db", max_entries=100, enabled=True, max_age_days=0)
+    old_stamp = (datetime.now() - timedelta(days=3000)).isoformat(timespec="seconds")
+    with hist._lock:
+        conn = hist._connect()
+        conn.execute(
+            "INSERT INTO transcriptions (timestamp, text) VALUES (?, ?)",
+            (old_stamp, "antique"),
+        )
+        conn.commit()
+    hist.add("récente")
+    assert len(hist.recent(10)) == 2
+    hist.close()
+
+
+# =============================================================================
+# 7) Garde hors-ligne différée pendant un téléchargement de modèle
 # =============================================================================
 def test_offline_env_differee_pendant_telechargement() -> None:
     """_set_offline_env(True) ne doit PAS reposer HF_HUB_OFFLINE pendant qu'un

@@ -23,6 +23,7 @@ class AudioConfig:
     vad_threshold: float = 0.01
     silence_duration: float = 1.5
     max_duration: float = 60.0
+    sound_feedback: bool = True    # bips locaux au démarrage/arrêt de la dictée (winsound)
 
 
 @dataclass
@@ -74,6 +75,7 @@ class HistoryConfig:
     enabled: bool = True
     path: str = "whisperty.db"
     max_entries: int = 200
+    max_age_days: int = 0          # rétention temporelle (RGPD) ; 0 = illimité
 
 
 @dataclass
@@ -343,6 +345,7 @@ _FIELD_BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
     ("OutputConfig", "type_delay"): (0.0, 1.0),
     ("OutputConfig", "restore_delay"): (0.0, 10.0),
     ("HistoryConfig", "max_entries"): (0, 100_000),
+    ("HistoryConfig", "max_age_days"): (0, 3650),
     ("AIConfig", "timeout"): (1.0, 600.0),
     ("LiveConfig", "block_duration"): (0.05, 5.0),
     ("LiveConfig", "max_segment"): (1.0, 300.0),

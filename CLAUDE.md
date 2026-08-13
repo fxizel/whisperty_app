@@ -44,6 +44,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne, DLL CUDA + repli CPU) | fait |
 | `cuda.py` | Détection GPU/composants CUDA + installation **opt-in** des wheels nvidia (cuBLAS/cuDNN) | fait |
 | `injector.py` | Injection texte (collage Ctrl+V par défaut, frappe en repli) | fait |
+| `feedback.py` | Retour sonore local de la dictée (winsound, opt-out `audio.sound_feedback`, aucun verrou) | fait |
 | `tray.py` | Icône zone de notification (pystray) | fait |
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |

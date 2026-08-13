@@ -8,6 +8,8 @@ audio:
   vad_threshold: 0.01     # seuil RMS du VAD simple (silence si niveau < seuil)
   silence_duration: 1.5   # secondes de silence avant arrêt auto (mode toggle)
   max_duration: 60        # garde-fou : durée max d'un enregistrement (s)
+  sound_feedback: true    # bips brefs au démarrage/arrêt de la dictée (100 % local,
+                          # winsound) — false pour un fonctionnement silencieux
 
 transcription:
   model: medium           # base | small | medium | large-v3  (medium = bon compromis
@@ -66,6 +68,8 @@ history:
   enabled: true           # archive chaque transcription dans une base SQLite locale
   path: whisperty.db      # fichier de la base (à côté de config.yaml par défaut)
   max_entries: 200        # nb max de transcriptions conservées (purge automatique)
+  max_age_days: 0         # rétention temporelle (RGPD) : purge les transcriptions
+                          # plus vieilles que N jours ; 0 = illimité (défaut)
 
 ai:
   # Raffinage optionnel par un LLM 100 % LOCAL (reponctuation, casse, fautes).

@@ -503,6 +503,21 @@ class GuiApi:
         ]
         return {"total": len(items), "items": items}
 
+    def search_history(self, query) -> dict:
+        """Recherche plein texte (FTS5, repli LIKE) — renvoie les ids correspondants.
+
+        Payload minimal : le JS possède déjà les entrées complètes (get_history) et
+        n'a besoin que de l'ensemble des ids à retenir. ``ids: null`` = recherche
+        indisponible (le JS retombe sur son filtre sous-chaîne local).
+        """
+        try:
+            limit = self._app.config.history.max_entries or 200
+            entries = self._app.history.search(str(query or ""), limit=limit)
+            return {"ids": [str(e.id) for e in entries]}
+        except Exception:  # noqa: BLE001
+            logger.exception("Recherche dans l'historique échouée")
+            return {"ids": None}
+
     def delete_history(self, entry_id) -> dict:
         try:
             self._app.history.delete(int(entry_id))

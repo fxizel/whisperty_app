@@ -193,6 +193,11 @@ const Mock = (() => {
     ],
     set_source: () => ({ ok: true }),
     get_history: () => ({ total: history.length, items: history.map(h => ({ ...h })) }),
+    search_history: (q) => ({
+      ids: history
+        .filter(h => (h.text || "").toLowerCase().includes(String(q || "").toLowerCase()))
+        .map(h => String(h.id)),
+    }),
     delete_history: (id) => { history = history.filter(h => h.id !== id); return { ok: true }; },
     clear_history: () => { history = []; return { ok: true }; },
     copy_text: (t) => { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} return { ok: true }; },
@@ -220,7 +225,7 @@ const ui = {
   sourceCount: 0,      // nombre d'options de source (sélecteur masqué si ≤ 1)
   cfg: null,
   dict: { enabled: true, hotwords: [], corrections: [] },  // éditeur dictionnaire (UC-19)
-  hist: { all: [], query: "", mode: "all", words: 0, page: 1, expanded: null },
+  hist: { all: [], query: "", mode: "all", words: 0, page: 1, expanded: null, searchIds: null },
   capturing: false,
   copiedId: null,
   stopping: false,  // arrêt demandé : retour visuel immédiat le temps que le worker finalise
@@ -1208,10 +1213,32 @@ async function loadHistory() {
 function filteredHistory() {
   let list = ui.hist.all;
   const q = ui.hist.query.trim().toLowerCase();
-  if (q) list = list.filter(x => (x.text || "").toLowerCase().includes(q));
+  if (q) {
+    // Résultats serveur (FTS5 : mots/préfixes, accents ignorés) quand disponibles ;
+    // sinon repli sous-chaîne local (aperçu autonome, pont en erreur).
+    if (ui.hist.searchIds) list = list.filter(x => ui.hist.searchIds.has(String(x.id)));
+    else list = list.filter(x => (x.text || "").toLowerCase().includes(q));
+  }
   if (ui.hist.mode !== "all") list = list.filter(x => categoryOf(x.source) === ui.hist.mode);
   if (ui.hist.words > 0) list = list.filter(x => (x.words || 0) >= ui.hist.words);
   return list;
+}
+
+// Recherche plein texte côté Python (débouncée) : le rendu immédiat utilise le
+// filtre local, affiné dès la réponse du pont. Une réponse périmée (la requête a
+// changé pendant l'await) est ignorée.
+async function runHistorySearch() {
+  const q = ui.hist.query.trim();
+  if (!q) { ui.hist.searchIds = null; renderHistory(); return; }
+  let res;
+  try {
+    res = (await call("search_history", q)) || {};
+  } catch (_err) {
+    res = { ids: null };
+  }
+  if (ui.hist.query.trim() !== q) return;
+  ui.hist.searchIds = Array.isArray(res.ids) ? new Set(res.ids.map(String)) : null;
+  renderHistory();
 }
 
 function renderHistory() {
@@ -1297,7 +1324,12 @@ function escapeHtml(s) {
 function bindHistory() {
   // Tout changement de filtre réinitialise la page ET l'élément déplié (sinon un id
   // déplié pourrait ne plus figurer dans les résultats filtrés).
-  $("#hist-search").addEventListener("input", e => { ui.hist.query = e.target.value; ui.hist.page = 1; ui.hist.expanded = null; renderHistory(); });
+  $("#hist-search").addEventListener("input", e => {
+    ui.hist.query = e.target.value; ui.hist.page = 1; ui.hist.expanded = null;
+    renderHistory();  // réactivité immédiate (filtre local), affinée par le serveur
+    clearTimeout(bindHistory._st);
+    bindHistory._st = setTimeout(runHistorySearch, 180);
+  });
   $$("#hist-mode .seg").forEach(b => b.addEventListener("click", () => {
     ui.hist.mode = b.dataset.hmode; ui.hist.page = 1; ui.hist.expanded = null;
     $$("#hist-mode .seg").forEach(x => x.classList.toggle("active", x === b));

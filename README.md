@@ -126,12 +126,12 @@ la plupart des changements à chaud.
 
 | Section | Clés notables |
 |---------|---------------|
-| `audio` | `device`, `samplerate`, `vad_threshold`, `silence_duration`, `max_duration` |
+| `audio` | `device`, `samplerate`, `vad_threshold`, `silence_duration`, `max_duration`, `sound_feedback` (bips au démarrage/arrêt de la dictée) |
 | `transcription` | `model`, `language`, `device` (cpu/cuda), `compute_type`, `local_files_only` |
 | `hotkey` | `mode` (toggle/push_to_talk), `combo`, `double_tap_key` |
 | `output` | `method` (paste/type), `restore_clipboard`, `restore_delay` (délai avant restauration du presse-papiers — augmenter sur machine lente/RDP) |
 | `dictionary` | `enabled`, `path` |
-| `history` | `enabled`, `path`, `max_entries` |
+| `history` | `enabled`, `path`, `max_entries`, `max_age_days` (rétention en jours, 0 = illimité) |
 | `ai` | `enabled`, `endpoint` (**local uniquement**), `model`, `prompt` |
 | `profiles` | `enabled`, `definitions` |
 | `live` | `device`, `block_duration`, `max_segment`, `silence_duration`, `vad_threshold`, `transcript_dir` |

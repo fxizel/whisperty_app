@@ -6,6 +6,38 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ## [Non publié]
 
+### Ajouté
+
+- **Retour sonore de dictée** (`audio.sound_feedback`, actif par défaut) : bips brefs
+  100 % locaux (winsound) au démarrage et à l'arrêt de l'enregistrement — le raccourci
+  est confirmé à l'oreille, sans regarder le tray. Désactivable dans `config.yaml`.
+- **Recherche plein texte dans l'historique** (SQLite FTS5, zéro dépendance) : le champ
+  de recherche de l'écran Historique ignore désormais les accents (« reunion » retrouve
+  « réunion ») et cherche par mots et préfixes ; repli automatique sur l'ancien filtre
+  si FTS5 est indisponible.
+- **Rétention temporelle de l'historique** (`history.max_age_days`, 0 = illimité) :
+  purge automatique des transcriptions plus vieilles que N jours (RGPD), à l'ouverture
+  et à chaque écriture.
+- **CI build + release** : job GitHub Actions qui valide requirements.txt, le build
+  PyInstaller et la compilation de l'installeur à chaque push ; workflow de release sur
+  tag X.Y.Z (cohérence version/CHANGELOG/tag, release brouillon avec l'installeur).
+
+### Corrigé
+
+- Corrections issues de l'audit 2026-08 (commits `affcb4a` et `9a1300d`), dont : un
+  dictionnaire enregistré en ANSI ne bloque plus le démarrage ; le collage ne peut plus
+  écraser une image copiée ni coller l'ancien texte (délai `output.restore_delay`) et
+  un échec d'injection est notifié ; l'application ne peut plus rester figée en fin de
+  session live/réunion ; l'écriture de `config.yaml`/`dictionary.txt` est atomique et
+  tolère les indentations non standard ; Échap annule la capture de raccourci ;
+  mise à jour et désinstallation de l'installeur assainies.
+
+### Sécurité / confidentialité
+
+- Le texte dicté n'est plus journalisé au niveau INFO (longueur seulement, contenu
+  réservé à DEBUG) ; CSP zéro-réseau dans la page de la fenêtre ; trafic de fond du
+  runtime WebView2 réduit ; télémétries onnxruntime et huggingface_hub désactivées.
+
 ## [0.3.0] — 2026-07-04
 
 ### Ajouté
