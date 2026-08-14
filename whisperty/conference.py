@@ -269,6 +269,13 @@ class ConferenceTranscriber:
         # Chaque segment : (instant de début en s, locuteur ou None, texte). En mode
         # « distinction », le locuteur est renseigné et les segments sont triés à la fin.
         self._segments: list[tuple[float, Optional[str], str]] = []
+        # Version de _segments, incrémentée sous _note_lock AVANT chaque insertion : elle
+        # accompagne un rendu (`render_snapshot`) pour que l'affichage puisse refuser de
+        # publier un rendu dont la source a bougé entre-temps (US-12). L'ordre
+        # incrément-PUIS-insertion importe : `segments_rev()` se lit sans verrou, et doit
+        # pouvoir annoncer un segment un instant trop tôt (réessai bénin) mais jamais
+        # trop tard (publication d'un rendu périmé, segment effacé de l'affichage).
+        self._segments_rev = 0
         # Notes utilisateur en session (UC-16), (position en s, texte). Elles arrivent
         # d'AUTRES threads (pont GUI, raccourci signet) que le mixeur : _segments/_notes/
         # _file sont protégés par ce verrou FEUILLE (jamais imbriqué avec un autre verrou).
@@ -322,6 +329,7 @@ class ConferenceTranscriber:
             return False
         self._stop.clear()
         self._segments = []
+        self._segments_rev += 1        # monotone : invalide tout rendu d'une session close
         self._notes = []
         self._error = None
         self._active = set()
@@ -646,6 +654,7 @@ class ConferenceTranscriber:
         """Mode mixé (itération 1) : un segment sans étiquette de locuteur."""
         elapsed = max(0.0, time.monotonic() - self._t0)
         with self._note_lock:
+            self._segments_rev += 1
             self._segments.append((elapsed, None, text))
         self._write_line(format_segment_line(elapsed, text), text)
 
@@ -699,6 +708,7 @@ class ConferenceTranscriber:
             elapsed = max(0.0, time.monotonic() - self._t0) if self._t0 else 0.0
         line = format_segment_line(elapsed, text, speaker="Note")
         with self._note_lock:
+            self._segments_rev += 1
             self._notes.append((elapsed, text))
             self._segments.append((elapsed, "Note", text))
             self._write_file_locked(line + "\n")
@@ -840,6 +850,7 @@ class ConferenceTranscriber:
             )
             return
         with self._note_lock:
+            self._segments_rev += 1
             self._segments.append((abs_start, key, text))
         self._write_line(
             format_segment_line(abs_start, text, speaker=self._label_for(key)), text
@@ -868,12 +879,34 @@ class ConferenceTranscriber:
 
         Rafraîchit le flux affiché après un renommage (US-12) : les libellés sont résolus
         à la demande depuis les clés stockées, dans l'ordre chronologique."""
+        return self.render_snapshot()[0]
+
+    def segments_rev(self) -> int:
+        """Version courante de ``_segments``, lue **sans verrou** (à dessein).
+
+        L'affichage la relit sous SON verrou (`app._publish_live_lines`) : prendre
+        `_note_lock` ici créerait l'imbrication interdite `_live_lock` → `_note_lock`.
+        C'est un entier monotone, incrémenté AVANT chaque insertion : une lecture non
+        verrouillée est atomique (GIL) et peut au pire voir la nouvelle valeur un instant
+        trop tôt — donc abandonner une publication de trop (réessai bénin), jamais
+        publier un rendu périmé."""
+        return self._segments_rev
+
+    def render_snapshot(self) -> tuple[list[str], int]:
+        """``render_lines()`` + la version de ``_segments`` AU MOMENT de l'instantané.
+
+        Les deux sont lus sous le MÊME ``_note_lock`` : c'est ce qui rend le couple
+        exploitable comme jeton. L'appelant (``app._publish_live_lines``) refuse de publier
+        un rendu dont la source a bougé depuis — sans quoi un segment arrivé pendant le
+        rendu serait effacé de l'affichage par une publication déjà périmée."""
         with self._note_lock:
             ordered = sorted(self._segments, key=lambda record: record[0])
-        return [
+            version = self._segments_rev
+        lines = [
             format_segment_line(start, text, speaker=self._label_for(key))
             for start, key, text in ordered
         ]
+        return lines, version
 
     # -- transcript ------------------------------------------------------------
     def _open_transcript(self, device_sys: Optional[str], mic_label: str) -> Optional[Path]:

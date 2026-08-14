@@ -570,15 +570,26 @@ class WhispertyApp:
             self._live_lines = []
             self._live_stamps = []
             self._live_repair = 0
-            self._live_render = 0
+            # Monotone (jamais remis à 0) : un worker de la session précédente ne doit
+            # pas retrouver « son » numéro de rendu et croire son instantané valide.
+            self._live_render += 1
             self._live_rev += 1
 
-    def _append_live_line(self, display: str, stamp: str = "") -> None:
-        """Ajoute une ligne au flux affiché (appelé depuis le thread worker)."""
+    def _append_live_line(
+        self, display: str, stamp: str = "", expect_render: int | None = None,
+    ) -> bool:
+        """Ajoute une ligne au flux affiché (appelé depuis le thread worker).
+
+        ``expect_render`` (réunion) : n'ajoute que si aucun rendu COMPLET n'a été publié
+        depuis l'instantané de l'appelant — un tel rendu contient déjà cette ligne, et
+        l'ajouter la dupliquerait. Renvoie ``True`` si la ligne a été ajoutée.
+        """
         display = (display or "").strip()
         if not display:
-            return
+            return False
         with self._live_lock:
+            if expect_render is not None and self._live_render != expect_render:
+                return False
             self._live_lines.append(display)
             self._live_stamps.append(stamp or "")
             if len(self._live_lines) > _LIVE_DISPLAY_MAX_LINES:
@@ -607,19 +618,26 @@ class WhispertyApp:
             self._live_repair += 1
 
     def _publish_live_lines(
-        self, lines: list[str], token: int, rev: int, disarm: bool,
+        self, lines: list[str], token: int, rev: int, source_rev: int, disarm: bool,
     ) -> bool:
         """Publie un rendu COMPLET du flux — seulement si rien n'a bougé depuis l'instantané.
 
-        ``(token, rev)`` vient de ``_live_generation()``, pris AVANT le rendu. Un
-        renommage (jeton) ou une ligne ajoutée (révision) survenu depuis rendrait cette
-        publication DESTRUCTRICE : elle écraserait un état plus frais que le sien (c'est
-        ainsi qu'un segment concurrent se perdait). On abandonne alors, en laissant
+        Trois conditions, toutes nécessaires. ``(token, rev)`` vient de
+        ``_live_generation()``, pris AVANT le rendu : un renommage (jeton) ou une ligne
+        ajoutée (révision) survenu depuis rendrait cette publication DESTRUCTRICE, elle
+        écraserait un état plus frais qu'elle. ``source_rev`` vient du rendu lui-même
+        (``render_snapshot``) et couvre l'autre bout : un segment entré dans `_segments`
+        pendant le rendu rend celui-ci périmé AVANT même d'être publié — le publier
+        effacerait ce segment de l'affichage. On abandonne alors, en laissant
         l'auto-réparation armée pour le segment suivant. ``disarm`` (chemin worker
         seulement) désarme après coup : le rendu publié absorbe le segment courant.
         """
         with self._live_lock:
             if self._live_repair != token or self._live_rev != rev:
+                return False
+            # ⚠️ `segments_rev()` ne prend AUCUN verrou (cf. sa docstring) : l'appeler
+            # ici ne crée donc pas l'imbrication interdite `_live_lock` → `_note_lock`.
+            if source_rev != self.conference.segments_rev():
                 return False
             self._live_lines = list(lines[-_LIVE_DISPLAY_MAX_LINES:])
             self._live_stamps = [_line_stamp(line) for line in self._live_lines]
@@ -632,20 +650,20 @@ class WhispertyApp:
     def _reemit_conference_lines(self, disarm: bool = False, attempts: int = 1) -> bool:
         """Réémet le flux réunion depuis les clés stockées (libellés courants, US-12).
 
-        Appelée SANS ``_live_lock`` : ``render_lines()`` prend le verrou feuille
+        Appelée SANS ``_live_lock`` : ``render_snapshot()`` prend le verrou feuille
         ``_note_lock`` du transcriber, et ces deux feuilles ne doivent jamais être
-        imbriquées. ``attempts`` > 1 pour un renommage (action manuelle et rare : mieux
-        vaut réessayer que laisser l'ancien libellé à l'écran). Renvoie ``True`` si un
-        rendu a été publié.
+        imbriquées. ``attempts`` > 1 quand l'appelant n'a pas de segment suivant pour le
+        rattraper (renommage, note — actions manuelles et rares : mieux vaut réessayer
+        que laisser l'écran en retard). Renvoie ``True`` si un rendu a été publié.
         """
         for _ in range(max(1, attempts)):
             token, rev, _render = self._live_generation()
             try:
-                lines = self.conference.render_lines()
+                lines, source_rev = self.conference.render_snapshot()
             except Exception:  # noqa: BLE001
                 logger.exception("Rendu du flux réunion échoué")
                 return False
-            if self._publish_live_lines(lines, token, rev, disarm):
+            if self._publish_live_lines(lines, token, rev, source_rev, disarm):
                 return True
         return False
 
@@ -658,19 +676,15 @@ class WhispertyApp:
         # intact). On repart alors du rendu complet : ce segment y figure déjà (le
         # transcriber alimente _segments AVANT d'appeler ce callback).
         token, _rev, render = self._live_generation()
-        if token:
-            if self._reemit_conference_lines(disarm=True):
-                return
-            # Publication abandonnée. Si un rendu COMPLET a été publié entre-temps
-            # (renommage), il contient déjà ce segment : l'ajouter le dupliquerait.
-            # Si le flux n'a fait que s'allonger (note), l'ajout reste nécessaire.
-            # Dans les deux cas le compteur reste armé → le segment suivant
-            # resynchronise la tuile (ordre chronologique compris).
-            with self._live_lock:
-                superseded = self._live_render != render
-            if superseded:
-                return
-        self._append_live_line(line, _line_stamp(line))
+        if token and self._reemit_conference_lines(disarm=True):
+            return
+        # Publication abandonnée (ou rien à réparer) : on ajoute la ligne, SAUF si un
+        # rendu complet a été publié depuis l'instantané ci-dessus. Un tel rendu contient
+        # forcément ce segment (`_segments` est alimenté AVANT ce callback, et la
+        # publication vérifie que la source n'a pas bougé depuis son rendu) : l'ajouter le
+        # dupliquerait. Le compteur reste armé dans ce cas → le segment suivant
+        # resynchronise la tuile (ordre chronologique compris).
+        self._append_live_line(line, _line_stamp(line), expect_render=render)
 
     def live_rev(self) -> int:
         """Compteur monotone du flux live (lu par GuiApi.poll, payload minimal)."""
@@ -895,13 +909,16 @@ class WhispertyApp:
         if line is None:
             logger.info("Note ignorée : aucune session live/réunion en cours.")
             return {"ok": False, "error": "Aucune session live ou réunion en cours."}
-        self._append_live_line(line, stamp_s or "")
         if state is TrayState.CONFERENCE:
-            # Une note entre dans _segments PUIS dans le flux affiché, en deux temps :
-            # une réémission concurrente (renommage, réparation) peut se glisser entre
-            # les deux et la dupliquer ou l'ignorer. On arme donc l'auto-réparation
-            # APRÈS l'ajout — le segment suivant repart du rendu complet, qui fait foi.
+            # La note est DÉJÀ dans `_segments` : on republie le flux complet au lieu de
+            # l'ajouter à la main. Un ajout aveugle la dupliquerait si un rendu complet
+            # concurrent (renommage, réparation) venait de la publier. Bénéfice annexe :
+            # elle apparaît à sa position chronologique. On arme d'abord — si les
+            # réessais échouent tous, le segment suivant resynchronise la tuile.
             self._arm_live_repair()
+            self._reemit_conference_lines(attempts=_LIVE_REEMIT_ATTEMPTS)
+        else:
+            self._append_live_line(line, stamp_s or "")
         return {"ok": True}
 
     # -- résumé de fin de session (UC-17) ---------------------------------------
@@ -1182,6 +1199,14 @@ class WhispertyApp:
         Le renommage est rétroactif : il s'applique au flux en direct (réémis ici depuis
         les clés stockées), à l'export et à l'historique (rendus à l'arrêt depuis les mêmes
         clés). Sans interrompre la capture."""
+        with self._lock:
+            state = self._state
+        if state is not TrayState.CONFERENCE:
+            # Hors session : le diariseur n'étant pas remis à zéro à l'arrêt, un clic
+            # tardif du panneau (resté affiché) réussirait et republierait les lignes de
+            # la réunion précédente — voire écraserait le flux d'un live qui vient de
+            # démarrer. Le renommage à froid passe par `rename_history_speaker`.
+            return {"ok": False, "error": "Aucune réunion en cours."}
         conf = self.conference
         try:
             ok = conf.rename_speaker(str(key or ""), None if name is None else str(name))

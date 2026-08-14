@@ -75,25 +75,36 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   live/réunion (`_live_lines` + `_live_rev`). C'est un **verrou feuille** : jamais imbriqué
   avec `_lock` (`poll()` relâche `_lock` avant de lire `live_rev()`). ⚠️ **Ni avec
   `_note_lock`** : le callback `on_segment` prend bien un second verrou feuille depuis US-12
-  (`_reemit_conference_lines()` → `conference.render_lines()`), mais **séquentiellement** —
+  (`_reemit_conference_lines()` → `conference.render_snapshot()`), mais **séquentiellement** —
   le rendu se fait HORS `_live_lock`, la publication sous `_live_lock` seul. Corollaire à ne
   pas casser : `conference._write_line` **doit** appeler `_on_segment` après avoir relâché
   `_note_lock` (verrou NON réentrant — rendre l'écriture fichier et la notification atomiques
-  figerait le worker de réunion dans `render_lines()`).
+  figerait le worker de réunion dans `render_snapshot()`). Conséquence directe :
+  `conference.segments_rev()` ne prend **aucun** verrou, puisqu'il est lu sous `_live_lock`.
 - **Renommage/notes en session vs flux affiché (V2, US-12)** : `rename_speaker` et `add_note`
   (thread du pont) touchent le flux pendant que le worker y ajoute des segments. Toute
-  publication d'un rendu complet est donc une **CAS** : instantané `(_live_repair, _live_rev)`
-  pris AVANT le rendu, publication seulement si rien n'a bougé depuis (sinon on écraserait plus
-  frais que soi — c'est ainsi qu'un segment se perdait). Deux compteurs sous `_live_lock` :
+  publication d'un rendu complet est donc une **CAS à trois termes**, refusée si l'un a bougé
+  entre l'instantané et la publication : `_live_repair` et `_live_rev` (l'AFFICHAGE a changé,
+  publier écraserait plus frais que soi) et `segments_rev` (la SOURCE a changé, le rendu est
+  déjà périmé — publier effacerait de la tuile un segment arrivé pendant le rendu, que son
+  propre worker croirait ensuite « déjà republié »). Compteurs sous `_live_lock` :
   `_live_repair` **arme** la resynchronisation (bumpé par un renommage et par une note ; le
   `_on_conference_segment` suivant repart du rendu complet au lieu d'ajouter, le segment y
   figurant déjà puisque `_segments` est alimenté AVANT le callback) et n'est **désarmé** que
-  par une réparation publiée ; `_live_render` compte les rendus complets publiés et distingue
-  « tout le flux a été republié » (ne pas ajouter, ce serait un doublon) de « une ligne a été
-  ajoutée » (ajouter reste nécessaire). Invariant : **aucun segment n'est jamais omis** ; une
-  incohérence résiduelle (doublon, ordre) laisse le compteur armé et disparaît au segment
-  suivant, puis à l'arrêt quand la tuile bascule sur le texte final d'historique. Fichier et
-  historique ne sont pas concernés (rendus depuis les clés à l'arrêt).
+  par une réparation publiée ; `_live_render` compte les rendus complets publiés (monotone,
+  jamais remis à zéro) et conditionne l'ajout d'une ligne (`_append_live_line(expect_render=…)`)
+  — un rendu publié depuis contient déjà ce segment, l'ajouter ferait doublon. Côté
+  transcriber, `_segments_rev` est incrémenté **avant** l'insertion : `segments_rev()` étant
+  lu sans verrou, il doit pouvoir annoncer un segment trop tôt (réessai bénin) mais jamais
+  trop tard. En réunion, une note n'est donc PAS ajoutée à la main : elle est déjà dans
+  `_segments`, le flux est republié (elle apparaît à sa place chronologique, sans risque de
+  doublon). Invariant : **aucun segment n'est jamais omis ni dupliqué durablement** ; une
+  incohérence résiduelle d'ordre laisse le compteur armé et disparaît au segment suivant, puis
+  à l'arrêt quand la tuile bascule sur le texte final d'historique. `rename_speaker` exige
+  l'état `CONFERENCE` (le diariseur n'est pas remis à zéro à l'arrêt : sans cette garde, un
+  clic tardif republierait la réunion précédente, voire écraserait un live qui démarre ; le
+  renommage à froid passe par `rename_history_speaker`). Fichier et historique ne sont jamais
+  concernés (rendus depuis les clés à l'arrêt).
 - `_stop_and_process()` relâche `_lock` avant l'arrêt bloquant de PortAudio. À l'inverse,
   `_start_recording()` tient `_lock` pendant `recorder.start()` **à dessein** (évite un flux
   orphelin si un stop concurrent survient pendant l'ouverture du périphérique).

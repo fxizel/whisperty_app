@@ -67,8 +67,12 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
   mise à jour et désinstallation de l'installeur assainies.
 - Renommer un locuteur ou prendre une note **pendant** une réunion ne peut plus laisser
   la tuile de transcription en direct avec une ligne manquante ou affichée deux fois :
-  l'affichage se réaligne sur le rendu complet au segment suivant. Le fichier exporté et
-  l'historique n'étaient pas concernés (rendus à l'arrêt depuis les mêmes clés).
+  l'affichage se réaligne sur le rendu complet au segment suivant. Une note prise en
+  séance apparaît désormais à sa position chronologique et non en fin de flux. Le fichier
+  exporté et l'historique n'étaient pas concernés (rendus à l'arrêt depuis les mêmes clés).
+- Renommer un locuteur après la fin d'une réunion, depuis un panneau resté affiché, ne
+  peut plus réafficher la session précédente ni écraser une transcription live qui vient
+  de démarrer. Le renommage d'une réunion terminée se fait dans l'écran Historique.
 
 ### Sécurité / confidentialité
 
