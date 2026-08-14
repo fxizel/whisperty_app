@@ -21,5 +21,6 @@ Markdown) :
 - `skills/release/SKILL.md` — procédure de release ordonnée (bump de version, tests, build
   PyInstaller, installeur, signature) et pièges du projet.
 
-Reliquats et chantiers en cours : `docs/reliquats-audit.md`. Historique fonctionnel :
-`CHANGELOG.md`.
+Backlog produit : `docs/backlog.md`, spécifications : `docs/specifications/`, historique
+fonctionnel : `CHANGELOG.md`. Les dettes techniques connues sont signalées en commentaire
+à l'endroit concerné dans le code, pas dans un document à part.

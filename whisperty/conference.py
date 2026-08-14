@@ -842,7 +842,17 @@ class ConferenceTranscriber:
 
         ``gen`` (worker de diarisation) : jeton de génération de la session émettrice.
         S'il est périmé — worker orphelin d'une session précédente — le segment est
-        écarté au lieu de polluer le transcript/historique de la session courante."""
+        écarté au lieu de polluer le transcript/historique de la session courante.
+
+        ⚠️ Dette connue, non corrigée : ce contrôle est un contrôle-puis-agit fait HORS
+        ``_note_lock``, et ``start()`` réinitialise ``_segments``/``_segments_rev``/
+        ``_session_gen`` sans verrou non plus. Un orphelin déschédulé juste après un
+        contrôle réussi peut donc insérer dans les ``_segments`` de la session SUIVANTE
+        (fenêtre de quelques bytecodes, orphelin dont le ``join`` a expiré). Correction
+        si le besoin se confirme : déplacer le contrôle de ``gen`` DANS le ``with
+        self._note_lock`` ci-dessous, et envelopper le bloc de reset de ``start()`` dans
+        ce même verrou feuille — ``conference.start()`` est appelé hors ``_lock``, donc
+        sans risque d'imbrication."""
         if gen is not None and gen != self._session_gen:
             logger.warning(
                 "Segment de diarisation tardif écarté (session terminée) : %d caractères.",
@@ -889,7 +899,12 @@ class ConferenceTranscriber:
         C'est un entier monotone, incrémenté AVANT chaque insertion : une lecture non
         verrouillée est atomique (GIL) et peut au pire voir la nouvelle valeur un instant
         trop tôt — donc abandonner une publication de trop (réessai bénin), jamais
-        publier un rendu périmé."""
+        publier un rendu périmé.
+
+        ⚠️ Cet argument s'appuie sur le GIL : sur un build *free-threaded*, cette lecture
+        n'est appariée à aucune barrière avec le relâchement de ``_note_lock`` de
+        l'écrivain. Sans objet sur les roues CPython visées — à reprendre si ce mode
+        devient une cible."""
         return self._segments_rev
 
     def render_snapshot(self) -> tuple[list[str], int]:
