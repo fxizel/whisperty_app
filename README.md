@@ -4,6 +4,7 @@
 > propulsée par OpenAI Whisper (`faster-whisper`).
 
 [![CI](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml/badge.svg)](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
 ![Plateforme](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Confidentialité](https://img.shields.io/badge/100%25-local%20%C2%B7%20z%C3%A9ro%20r%C3%A9seau-2ea44f)
@@ -53,14 +54,24 @@ flowchart LR
 - ⌨️ **Injection system-wide** dans l'app active (Ctrl+V robuste pour les accents, frappe en repli).
 - 📖 **Dictionnaire personnalisé** : termes métier favorisés + corrections automatiques —
   géré depuis la fenêtre (appliqué à chaud) ou par simple fichier texte.
-- 🔔 Icône tray colorée selon l'état (gris / rouge / orange / bleu / vert).
+- 🔤 **Ponctuation dictée** (opt-in) — « point », « virgule », « à la ligne », « nouveau
+  paragraphe », « ouvrez la parenthèse »… converties en ponctuation réelle, typographie
+  française et majuscules gérées. Dictée seulement, jamais en live ni en réunion.
+- 🔔 Icône tray colorée selon l'état (gris / rouge / orange / bleu / vert) et **bips de
+  confirmation** au démarrage/arrêt de la dictée (locaux, désactivables).
 
 **Interface & historique**
 - 🖥️ **Fenêtre WebView2** — dashboard (statut live, dernière transcription, statistiques du jour),
   configuration visuelle, gestion du dictionnaire (termes & corrections) et historique navigable
   (recherche, filtres, copie/suppression).
   La croix réduit dans la zone de notification ; fermeture définitive via « Quitter ».
-- 📜 **Historique SQLite local** — purge automatique, « Copier la dernière transcription » depuis le tray.
+- 🔎 **Recherche plein texte** dans l'historique (SQLite FTS5) — insensible aux accents
+  (« reunion » retrouve « réunion »), par mots et préfixes.
+- 📜 **Historique SQLite local** — purge automatique par nombre **et par ancienneté**
+  (`max_age_days`, RGPD), « Copier la dernière transcription » depuis le tray.
+- ⚙️ **Préréglages de performance** (écran Configuration) — « Rapide » / « Équilibré » /
+  « Précis » remplissent les champs en un clic ; **« Tester sur ce poste »** mesure la
+  vitesse de transcription réelle sur un audio témoin généré localement (rien à télécharger).
 - 📂 **Import de fichiers audio** (WAV / MP3 / M4A / FLAC…) — transcrit, copié et archivé, sans ffmpeg.
 - 🔔 **Notifications utilisateur** — micro absent, modèle manquant, erreurs de dictée et résumés de session
   remontés dans l'interface et la zone de notification.
@@ -75,12 +86,16 @@ flowchart LR
 - 🧑‍🤝‍🧑 **Mode réunion** — capture micro + sortie système simultanés, export horodaté avec distinction
   par source (`Moi` / `Interlocuteurs`), déterministe et 100 % local.
 - 🗣️ **Diarisation des locuteurs** (opt-in) — au-delà de la distinction par source, étiquettes de voix
-  individuelles (`Locuteur 1`, `Locuteur 2`…) via empreinte MFCC en pur NumPy, renommables depuis
-  la fenêtre. Aucun modèle à télécharger.
+  individuelles (`Locuteur 1`, `Locuteur 2`…), renommables **pendant** la session comme **après coup**
+  depuis l'écran Historique (texte archivé, recherche et fichier exporté réécrits). Deux niveaux de
+  précision : « Intégré » (défaut) — empreinte MFCC en pur NumPy, **aucun modèle à télécharger** — ou
+  « Modèle local » (~26 Mo, WeSpeaker, téléchargeable en un clic, inférence CPU seule) qui sépare
+  nettement mieux les voix proches. Modèle absent ou illisible : repli notifié sur l'empreinte intégrée.
 - 📝 **Notes en session** (live / réunion) — saisie dans la fenêtre, citation d'un segment ou signet
   horodaté par raccourci global ; entrelacées chronologiquement dans le transcript.
 - 📋 **Résumé de fin de session** (opt-in) — résumé par LLM local à l'arrêt d'un live ou d'une réunion,
-  indépendant du raffinage de dictée ; ajouté au transcript et à l'historique.
+  indépendant du raffinage de dictée ; ajouté au transcript et à l'historique. Un **gabarit de compte
+  rendu** Markdown éditable (`summary.template`) en dérive au besoin un document structuré.
 
 > ⚖️ Pensez au **consentement** des participants avant d'enregistrer une réunion.
 
@@ -168,7 +183,10 @@ python -m pytest tests/ --cov=whisperty --cov-report=term-missing
 ```
 
 Une **CI GitHub Actions** (`.github/workflows/ci.yml`) exécute la suite sur Windows et Linux
-(Python 3.10 → 3.12), vérifie un seuil de couverture de 80 % et passe `ruff`.
+(Python 3.10 → 3.14), vérifie un seuil de couverture de 80 %, passe `ruff` et une **garde
+zéro-réseau** (aucune bibliothèque réseau dans `whisperty/`) ; un dernier job valide le build
+PyInstaller et la compilation de l'installeur. Un tag `X.Y.Z` déclenche `release.yml` :
+cohérence version / CHANGELOG / tag, puis release brouillon avec l'installeur.
 
 ## Déploiement (installeur Windows)
 
@@ -225,11 +243,12 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `transcriber.py` | Wrapper faster-whisper (modèle configurable, hotwords, garde hors-ligne) |
 | `cuda.py` | Détection GPU/composants CUDA + installation opt-in depuis l'UI |
 | `injector.py` | Injection texte (Ctrl+V par défaut, frappe en repli) |
+| `punctuation.py` · `feedback.py` | Ponctuation dictée (opt-in) + bips locaux de confirmation |
 | `tray.py` | Icône zone de notification (pystray) |
 | `app.py` | Orchestration / machine à états + raccourci global + surveillance VAD |
 | `config.py` · `dictionary.py` | Chargement de `config.yaml` / du dictionnaire (édition assistée depuis la fenêtre, commentaires préservés) |
 | `history.py` | Historique des transcriptions (SQLite local, thread-safe) |
-| `ai.py` | Raffinage texte par LLM **local** (garde localhost) |
+| `ai.py` · `report.py` | Raffinage/résumé par LLM **local** (garde localhost) + compte rendu par gabarit |
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |
 | `loopback.py` · `live.py` | Capture loopback (soundcard/WASAPI) + transcription live |
 | `conference.py` · `diarization.py` | Mode réunion + diarisation des locuteurs (MFCC NumPy par défaut, modèle ONNX local en option) |
@@ -240,4 +259,5 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 
 Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md).
 Spécifications fonctionnelles : [`docs/specifications/`](docs/specifications/).
+Historique des versions : [`CHANGELOG.md`](CHANGELOG.md).
 Origine et licences des modèles (Whisper, diarisation) : [`NOTICE.md`](NOTICE.md).

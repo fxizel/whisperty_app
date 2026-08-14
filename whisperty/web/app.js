@@ -251,7 +251,7 @@ const Mock = (() => {
     copy_text: (t) => { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} return { ok: true }; },
     win_minimize: () => ({ ok: true }), win_maximize: () => ({ ok: true }), win_close: () => ({ ok: true }),
     win_move: () => ({ ok: true }),
-    get_version: () => ({ version: "0.1.0" }),
+    get_version: () => ({ version: "1.0.0" }),
   };
 })();
 

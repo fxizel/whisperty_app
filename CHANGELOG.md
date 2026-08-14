@@ -4,7 +4,11 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) ; les versions suivent le
 [versionnage sémantique](https://semver.org/lang/fr/).
 
-## [Non publié]
+## [1.0.0] — 2026-08-14
+
+Première version stable. Le périmètre fonctionnel du dossier de spécifications
+(UC-01 à UC-19) est couvert ; la contrainte cardinale — aucune donnée ne quitte la
+machine — est vérifiée par un audit de confidentialité et un garde-fou automatisé.
 
 ### Ajouté
 
@@ -73,6 +77,13 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 - Renommer un locuteur après la fin d'une réunion, depuis un panneau resté affiché, ne
   peut plus réafficher la session précédente ni écraser une transcription live qui vient
   de démarrer. Le renommage d'une réunion terminée se fait dans l'écran Historique.
+- **Encodage de la chaîne de build** : `installer/whisperty.iss` et `scripts/*.ps1`
+  étaient en UTF-8 **sans BOM**, seule forme qu'Inno Setup et Windows PowerShell 5.1
+  (le shell par défaut de Windows) lisent comme de l'ANSI. Conséquences : les dialogues
+  français de l'installeur (données conservées à la désinstallation, avertissement
+  WebView2) affichaient des accents corrompus, et `build.ps1` ne se compilait plus du
+  tout hors PowerShell 7 — un tiret cadratin y était lu comme un guillemet fermant.
+  Les fichiers portent désormais un BOM UTF-8.
 
 ### Sécurité / confidentialité
 

@@ -148,20 +148,24 @@ def test_version_module() -> None:
     from whisperty import __version__
     from whisperty.version import version_info, version_tuple
 
-    assert __version__ == "0.3.0"
-    assert version_tuple() == (0, 3, 0, 0)
-    assert version_info() == "0.3.0.0"
+    # Version-agnostique : on teste la DÉRIVATION (quadruplet, 4 segments), pas le
+    # numéro courant — sinon chaque bump de version.py casse la suite.
+    parts = tuple(int(x) for x in __version__.split("."))
+    assert len(parts) == 3, "version.py attendu au format X.Y.Z"
+    assert version_tuple() == parts + (0,)
+    assert version_info() == f"{__version__}.0"
     print("[extra 2b] version : __version__ + version_tuple/info  OK")
 
 
 def test_main_version_flag(capsys) -> None:
     import whisperty.__main__ as m
+    from whisperty import __version__
 
     with __import__("pytest").raises(SystemExit) as exc:
         m.main(["--version"])
     assert exc.value.code == 0
     out = capsys.readouterr().out
-    assert "whisperty 0.3.0" in out
+    assert f"whisperty {__version__}" in out
     print("[extra 2c] __main__ --version  OK")
 
 

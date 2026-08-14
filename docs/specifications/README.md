@@ -50,4 +50,4 @@ Priorisation **MoSCoW** : `M` (Must), `S` (Should), `C` (Could), `W` (Won't / ho
 
 ---
 
-*Version du dossier : 1.1 — 2026-07-06. Produit couvert : Whisperty V2 (0.3.0 — UC-01 à UC-19).*
+*Version du dossier : 1.1 — 2026-07-06. Produit couvert : Whisperty V2 (1.0.0 — UC-01 à UC-19).*
