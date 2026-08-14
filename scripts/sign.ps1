@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Signature Authenticode (signtool) pour whisperty.exe et l'installeur Inno Setup.
 

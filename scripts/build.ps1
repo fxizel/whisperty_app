@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build de déploiement Whisperty : exécutable autonome (onedir) + config + dictionnaire
     + modèle Whisper bundlé, prêt à être empaqueté par l'installeur (Inno Setup).

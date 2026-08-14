@@ -1,4 +1,4 @@
-# Whisperty — démarrage automatique avec Windows (par utilisateur, sans droits admin).
+﻿# Whisperty — démarrage automatique avec Windows (par utilisateur, sans droits admin).
 # Usage :
 #   .\scripts\install_autostart.ps1                 # cible dist\whisperty.exe
 #   .\scripts\install_autostart.ps1 -ExePath "C:\chemin\whisperty.exe"

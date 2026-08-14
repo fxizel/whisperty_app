@@ -1,4 +1,4 @@
-; ============================================================================
+﻿; ============================================================================
 ;  Whisperty — script d'installation Inno Setup 6
 ;  Compiler avec :  scripts\make_installer.ps1  (localise ISCC.exe et transmet la
 ;  version depuis whisperty/version.py ; un ISCC direct exige /DMyAppVersion=X.Y.Z)

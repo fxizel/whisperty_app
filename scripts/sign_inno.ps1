@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Point d'entrée SignTool pour Inno Setup (reçoit le chemin du fichier à signer).
 #>

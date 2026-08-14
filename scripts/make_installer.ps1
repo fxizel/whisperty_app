@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Compile l'installeur Whisperty (installer\whisperty.iss) avec Inno Setup.
 
