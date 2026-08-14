@@ -158,6 +158,18 @@ conference:
     label_prefix: "Locuteur"   # préfixe des étiquettes automatiques
     similarity_threshold: 0.75 # cosinus ≥ seuil => même locuteur (baisser si sur-segmenté)
     min_segment: 1.0           # segments plus courts que N s => non diarisés (repli source)
+    # Backend d'empreinte vocale (CO-19) : « mfcc » (défaut, statistiques NumPy, RIEN à
+    # télécharger) ou « onnx » (modèle de vérification du locuteur, sépare bien mieux les
+    # voix proches). Le modèle ONNX se télécharge en UN CLIC depuis l'écran Configuration
+    # (opt-in explicite, comme le modèle Whisper) puis tout reste hors-ligne. Modèle absent
+    # ou illisible => repli automatique sur « mfcc », jamais d'échec de session.
+    backend: mfcc
+    onnx_model: models/speaker-embedding.onnx  # chemin (relatif à config.yaml)
+    # Seuil DÉDIÉ au backend onnx : son échelle de similarité n'est pas celle du mfcc
+    # (réutiliser 0,75 créerait un locuteur par segment). Calibré sur des
+    # enregistrements réels ; monter un peu si deux voix sont confondues, baisser si
+    # une même personne reçoit plusieurs étiquettes.
+    onnx_similarity_threshold: 0.45
 
 notes:
   # Notes en session — modes Live continu et Conférence uniquement. Saisie dans la

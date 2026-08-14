@@ -509,15 +509,22 @@ en une transcription continue sans étiquette de locuteur.
 > UC-18 **étend** UC-10 : il ne crée pas de nouvel état dans la machine à états (§3) et
 > s'exécute pendant `CONFERENCE`. Il ne s'applique pas au mode live seul (UC-09).
 
-> **Note d'implémentation (itération livrée)** : la diarisation intégrée n'exige **aucun
-> modèle ni téléchargement** — l'empreinte vocale est calculée localement en pur NumPy
-> (statistiques MFCC + clustering en ligne, cf. `diarization.py`). C'est la forme la plus
-> forte de CO-17 (rien à télécharger = rien ne peut fuiter) ; en contrepartie, la précision
-> est inférieure à un modèle neuronal dédié (sépare des voix nettement différentes). Le
-> parcours de **téléchargement guidé d'un modèle** (extensions ci-dessous, CO-18/CO-19)
-> décrit donc un **backend optionnel de meilleure qualité (ex. ONNX hors-ligne), à venir** ;
-> l'embedder est enfichable pour l'accueillir. Aujourd'hui, activer la diarisation ne
-> déclenche aucune bannière de téléchargement — la fonctionnalité marche hors-ligne d'emblée.
+> **Note d'implémentation — deux backends d'empreinte vocale** (`speaker_diarization.backend`) :
+> - `mfcc` (**défaut**) : empreinte calculée localement en pur NumPy (statistiques MFCC +
+>   clustering en ligne, cf. `diarization.py`). **Aucun modèle, aucun téléchargement** —
+>   la forme la plus forte de CO-17 (rien à télécharger = rien ne peut fuiter). En
+>   contrepartie la précision est faible : sur des enregistrements réels, ce backend ne
+>   sépare des voix que si elles sont très différentes.
+> - `onnx` (**option, CO-19**) : empreinte calculée par un modèle de vérification du
+>   locuteur ONNX local (~25 Mio), inférence **CPU uniquement**. Nettement plus précis
+>   (4 voix correctement séparées sur un enregistrement de test réel). Le modèle se
+>   télécharge en **un clic depuis l'écran Configuration** (opt-in explicite, doctrine
+>   UC-14/`modeldl.py`), puis tout redevient hors-ligne. Modèle absent, illisible ou
+>   `onnxruntime` manquant ⇒ **repli automatique sur `mfcc`, notifié** : la réunion a
+>   toujours lieu (BR-08/RE-13).
+>
+> Activer la diarisation ne déclenche donc **jamais** de téléchargement automatique : le
+> défaut fonctionne hors-ligne d'emblée, et le backend ONNX n'est proposé qu'explicitement.
 
 **Scénario nominal (réunion hybride)**
 1. L'utilisateur active la diarisation des locuteurs (`speaker_diarization.enabled: true`) et lance une réunion (UC-10).

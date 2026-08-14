@@ -102,6 +102,9 @@ if ($doSign) {
 # --- 6. Réglages utilisateur déposés À CÔTÉ de l'exe (éditables) ----------------
 Copy-Item "$root\config.yaml" $appDir -Force
 Copy-Item "$root\dictionary.txt" $appDir -Force
+# Attributions des modèles (licence CC-BY-4.0 du modèle de diarisation : l'attribution
+# doit accompagner l'application installée, pas rester dans le dépôt).
+Copy-Item "$root\NOTICE.md" $appDir -Force
 
 # Défauts d'expédition NEUTRES : le config.yaml du dépôt reflète le poste de dev
 # (CUDA actif, LLM local LM Studio…). Un poste cible vierge n'a ni composants CUDA
@@ -110,9 +113,11 @@ Copy-Item "$root\dictionary.txt" $appDir -Force
 # session). On expédie donc : CPU, IA locale et résumé désactivés (opt-in documenté,
 # réactivables depuis l'écran Configuration). La diarisation est également remise
 # à son défaut opt-in (CO-18 : « Locuteur N » ne doit s'activer que sur choix
-# explicite de l'utilisateur). Commentaires du YAML préservés.
+# explicite de l'utilisateur), backend « mfcc » compris : le modèle ONNX n'est pas
+# bundlé, expédier « onnx » pousserait donc vers un téléchargement dès la 1re réunion.
+# Commentaires du YAML préservés.
 Invoke-Checked {
-    & $py -c "from whisperty.configio import update_yaml_file; update_yaml_file(r'$appDir\config.yaml', {'transcription.device':'cpu','transcription.compute_type':'int8','ai.enabled':False,'summary.enabled':False,'conference.speaker_diarization.enabled':False})"
+    & $py -c "from whisperty.configio import update_yaml_file; update_yaml_file(r'$appDir\config.yaml', {'transcription.device':'cpu','transcription.compute_type':'int8','ai.enabled':False,'summary.enabled':False,'conference.speaker_diarization.enabled':False,'conference.speaker_diarization.backend':'mfcc'})"
 } "patch config (défauts d'expédition)"
 
 # --- 7. Modèle Whisper ---------------------------------------------------------

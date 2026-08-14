@@ -148,13 +148,27 @@ class SpeakerDiarizationConfig:
     (empreinte MFCC pur NumPy + clustering en ligne, cf. :mod:`whisperty.diarization`).
     Désactivée par défaut (CO-18). Sans effet si ``distinguish_speakers: false``
     (mixage) : la diarisation exige la transcription séparée des sources.
+
+    ``backend`` (CO-19) choisit l'embedder : ``mfcc`` (défaut, rien à télécharger) ou
+    ``onnx`` (modèle d'empreinte vocale local, meilleure séparation des voix proches —
+    téléchargement **opt-in** depuis l'écran Configuration, puis 100 % hors-ligne).
+    Modèle ONNX absent ou illisible ⇒ **repli gracieux** sur ``mfcc`` (BR-08/RE-13).
     """
 
     enabled: bool = False
     max_speakers: int = 6                 # borne du nb de locuteurs détectés PAR source
     label_prefix: str = "Locuteur"        # préfixe des étiquettes auto (« Locuteur 2 »)
-    similarity_threshold: float = 0.75    # cosinus ≥ seuil ⇒ même locuteur (à ajuster)
+    similarity_threshold: float = 0.75    # cosinus ≥ seuil ⇒ même locuteur (backend mfcc)
     min_segment: float = 1.0              # segments plus courts ⇒ non diarisés (repli source)
+    # -- backend d'empreinte vocale (CO-19) ------------------------------------
+    backend: str = "mfcc"                 # mfcc (défaut, zéro téléchargement) | onnx
+    onnx_model: str = "models/speaker-embedding.onnx"   # chemin relatif à config.yaml
+    # Les échelles de similarité DIFFÈRENT d'un embedder à l'autre : un modèle de
+    # vérification du locuteur sépare les voix bien plus finement que des statistiques
+    # MFCC, et réutiliser 0,75 y créerait un locuteur par segment. Seuil dédié,
+    # CALIBRÉ sur des enregistrements multi-locuteurs réels (0,35–0,45 retrouvent le
+    # bon nombre de voix ; 0,55 et au-delà sur-segmentent).
+    onnx_similarity_threshold: float = 0.45
 
 
 @dataclass

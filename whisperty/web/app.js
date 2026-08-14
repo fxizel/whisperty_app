@@ -26,6 +26,7 @@ const Mock = (() => {
     diarization: false,
     maxSpeakers: 6,
     labelPrefix: "Locuteur",
+    diarBackend: "mfcc",
   };
   const stats = { words: 3482, dur: 47, trans: 18 };
   let lastText = "Pense à relancer l'équipe produit sur la roadmap du quatrième trimestre, et préparer un récapitulatif des retours utilisateurs avant la réunion de lundi matin.";
@@ -80,6 +81,10 @@ const Mock = (() => {
 
   // Bench local factice (préréglages de performance) : ~2 s de « mesure », résultat plausible.
   let bench = { state: "idle", seconds: null, load: null, message: "" };
+
+  // Modèle de diarisation ONNX factice (CO-19) : absent au départ pour démontrer le
+  // flux de téléchargement opt-in, installé après ~3 s.
+  let diarModel = { installed: false, download: { state: "idle", message: "", mb: 0 } };
 
   // Flux live factice (modes live/conférence) : des segments s'ajoutent au fil de
   // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
@@ -204,6 +209,18 @@ const Mock = (() => {
       return { ok: true };
     },
     bench_status: () => ({ ...bench }),
+    diar_model_status: () => ({
+      backend: cfg.diarBackend, installed: diarModel.installed,
+      sizeLabel: "~26 Mo", download: { ...diarModel.download },
+    }),
+    download_diar_model: () => {
+      if (diarModel.download.state === "running") return { ok: true };
+      diarModel.download = { state: "running", message: "Téléchargement du modèle de diarisation (~26 Mo)…", mb: 8 };
+      setTimeout(() => {
+        diarModel = { installed: true, download: { state: "done", message: "Modèle de diarisation installé.", mb: 26 } };
+      }, 3000);
+      return { ok: true };
+    },
     list_microphones: () => cfg.mics,
     list_audio_outputs: () => [
       { value: null, label: "Sortie par défaut" },
@@ -885,6 +902,7 @@ async function loadConfig() {
   ui.cfg.diarization = !!c.diarization;
   ui.cfg.maxSpeakers = c.maxSpeakers ?? 6;
   ui.cfg.labelPrefix = c.labelPrefix || "Locuteur";
+  ui.cfg.diarBackend = c.diarBackend === "onnx" ? "onnx" : "mfcc";
 
   // Support GPU (affiché si CUDA sélectionné)
   refreshGpuStatus();
@@ -911,6 +929,17 @@ function applyConferenceConfigState() {
   const prefixEl = $("#cfg-label-prefix");
   if (maxEl) maxEl.value = ui.cfg.maxSpeakers ?? 6;
   if (prefixEl) prefixEl.value = ui.cfg.labelPrefix || "Locuteur";
+
+  // Backend d'empreinte vocale (CO-19) : visible avec la diarisation seulement.
+  const block = $("#conf-backend-block");
+  if (block) {
+    const show = diarization && distinguish;
+    block.style.display = show ? "block" : "none";
+    const backend = ui.cfg.diarBackend === "onnx" ? "onnx" : "mfcc";
+    $$("#diar-backend-switch .seg").forEach(b =>
+      b.classList.toggle("active", b.dataset.diarbk === backend));
+    if (show) refreshDiarModel(); else stopDiarModelPolling();
+  }
 }
 
 function wireConferenceConfig() {
@@ -938,6 +967,84 @@ function wireConferenceConfig() {
   if (prefixEl) prefixEl.addEventListener("input", () => {
     ui.cfg.labelPrefix = prefixEl.value;
   });
+  $$("#diar-backend-switch .seg").forEach(b => b.addEventListener("click", () => {
+    ui.cfg.diarBackend = b.dataset.diarbk;
+    applyConferenceConfigState();     // re-rend la sélection + l'état du modèle
+  }));
+  const dlBtn = $("#diar-model-btn");
+  if (dlBtn) dlBtn.addEventListener("click", downloadDiarModel);
+}
+
+// ── Modèle de diarisation ONNX (CO-19) ───────────────────────────────────────
+// Téléchargement OPT-IN (~26 Mo), doctrine du modèle Whisper : jamais silencieux,
+// progression par polling, puis 100 % hors-ligne. La zone d'état n'apparaît que pour
+// le backend « Modèle local » — l'option intégrée n'a rien à télécharger.
+let diarPollTimer = null;
+
+function stopDiarModelPolling() {
+  if (diarPollTimer) { clearTimeout(diarPollTimer); diarPollTimer = null; }
+}
+
+async function refreshDiarModel() {
+  const box = $("#diar-model-status");
+  const txt = $("#diar-model-text");
+  const btn = $("#diar-model-btn");
+  if (!box || !txt || !btn) return;
+  stopDiarModelPolling();
+  if (ui.cfg.diarBackend !== "onnx") {      // option intégrée : rien à afficher
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "";
+  const s = (await call("diar_model_status")) || {};
+  const dl = s.download || {};
+  btn.style.display = "none";
+  btn.disabled = false;
+
+  if (dl.state === "running") {
+    txt.style.color = "var(--violet-2)";
+    txt.textContent = (dl.message || "Téléchargement du modèle de diarisation…")
+      + (dl.mb ? ` (${dl.mb} Mo)` : "");
+    diarPollTimer = setTimeout(refreshDiarModel, 1200);
+    return;
+  }
+  if (dl.state === "error") {
+    txt.style.color = "var(--red-2)";
+    txt.textContent = dl.message || "Le téléchargement a échoué.";
+    btn.textContent = "Réessayer le téléchargement";
+    btn.style.display = "";
+    return;
+  }
+  if (s.installed) {
+    txt.style.color = "var(--green-2)";
+    txt.textContent = "✓ Modèle de diarisation installé — tout reste hors-ligne. "
+      + "Il sera utilisé dès la prochaine réunion.";
+    return;
+  }
+  txt.style.color = "var(--muted)";
+  // Consentement INFORMÉ : nommer le modèle, le serveur contacté et la licence.
+  // Un opt-in « jamais silencieux » doit dire ce qui part et vers où (cf. NOTICE.md).
+  txt.textContent = "Modèle absent : les réunions utilisent l'empreinte intégrée "
+    + "(moins précise) jusqu'au téléchargement. Modèle WeSpeaker ResNet34-LM "
+    + "(" + (s.sizeLabel || "~26 Mo") + ", licence CC-BY-4.0) téléchargé depuis "
+    + "huggingface.co — un seul téléchargement, déclenché par ce bouton ; ensuite "
+    + "plus aucun accès réseau. Attributions : fichier NOTICE.md.";
+  btn.textContent = "Télécharger le modèle (" + (s.sizeLabel || "~26 Mo") + ")";
+  btn.style.display = "";
+}
+
+async function downloadDiarModel() {
+  const btn = $("#diar-model-btn");
+  const txt = $("#diar-model-text");
+  btn.disabled = true;
+  const r = (await call("download_diar_model")) || {};
+  if (r.ok === false) {
+    txt.style.color = "var(--red-2)";
+    txt.textContent = r.error || "Téléchargement impossible.";
+    btn.disabled = false;
+    return;
+  }
+  refreshDiarModel();     // bascule en « running » + démarre le polling
 }
 
 function setSwitch(el, on) {
@@ -1185,6 +1292,7 @@ async function saveConfig() {
     diarization: ui.cfg.diarization,
     maxSpeakers: ui.cfg.maxSpeakers,
     labelPrefix: ui.cfg.labelPrefix,
+    diarBackend: ui.cfg.diarBackend,
   };
   await call("save_config", payload);
   const note = $("#saved-note");

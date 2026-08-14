@@ -1530,6 +1530,250 @@ def test_conference_diarization(tmp_path: Path) -> None:
     print("[27] diarisation réunion : clés locuteur, numérotation, renommage rétroactif, export, repli  OK")
 
 
+def _install_fake_onnxruntime(
+    record: dict, *, n_mels=80, two_inputs=False, dim=192, raise_on_run=False,
+):
+    """Doublure onnxruntime : enregistre providers/feeds et rend un vecteur déterministe.
+
+    Zéro binaire natif (la CI n'a pas de modèle ONNX) : ``record`` capture ce que
+    l'application demande, notamment les **providers** — la garde de confidentialité
+    la plus importante de ce chemin (cf. ``_ONNX_PROVIDERS``).
+    """
+    import numpy as np
+
+    ort = types.ModuleType("onnxruntime")
+
+    class _SessionOptions:
+        def __init__(self) -> None:
+            self.enable_profiling = True          # l'app doit le passer à False
+            self.log_severity_level = 0
+            self.intra_op_num_threads = 0
+
+    class _Meta:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+
+    class _Session:
+        def __init__(self, path, sess_options=None, providers=None):
+            record["path"] = path
+            record["providers"] = providers
+            record["options"] = sess_options
+
+        def get_inputs(self):
+            inputs = [_Meta("feats", ["B", "T", n_mels])]
+            if two_inputs:
+                inputs.append(_Meta("feats_length", ["B"]))
+            return inputs
+
+        def get_outputs(self):
+            return [_Meta("embs", ["B", dim])]
+
+        def run(self, names, feeds):
+            record["feeds"] = feeds
+            record["runs"] = record.get("runs", 0) + 1
+            if raise_on_run:
+                # Simule un modèle attendant une autre entrée (waveform brute…) :
+                # onnxruntime lève sur l'incompatibilité de forme.
+                raise RuntimeError("INVALID_ARGUMENT: unexpected input shape")
+            feats = feeds["feats"]
+            # Vecteur déterministe DÉPENDANT du contenu : deux signaux différents
+            # donnent des empreintes différentes (le clustering est ainsi testable).
+            base = float(np.mean(feats)), float(np.std(feats))
+            vec = np.zeros(dim, dtype=np.float32)
+            vec[0], vec[1] = base
+            vec[2] = 1.0
+            return [vec.reshape(1, dim)]
+
+    ort.SessionOptions = _SessionOptions
+    ort.InferenceSession = _Session
+    ort.disable_telemetry_events = lambda: record.__setitem__("telemetry_off", True)
+    return ort
+
+
+@contextmanager
+def _fake_onnxruntime(record: dict, **kwargs):
+    """Installe la doublure onnxruntime le temps du bloc (restauration garantie)."""
+    previous = sys.modules.get("onnxruntime")
+    sys.modules["onnxruntime"] = _install_fake_onnxruntime(record, **kwargs)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            sys.modules["onnxruntime"] = previous
+        else:
+            sys.modules.pop("onnxruntime", None)
+
+
+def test_diarization_fbank() -> None:
+    """CO-19 : features log-mel « kaldi fbank » en pur NumPy (aucun modèle requis)."""
+    import numpy as np
+
+    from whisperty.diarization import fbank_features
+
+    rng = np.random.default_rng(7)
+    audio = (rng.standard_normal(16_000) * 0.1).astype(np.float32)
+
+    feats = fbank_features(audio)
+    # 1 s à 16 kHz, fenêtres 25 ms toutes les 10 ms, snip_edges → 98 trames × 80 canaux.
+    assert feats.shape == (98, 80), feats.shape
+    assert feats.dtype.name == "float32"
+    # CMN : moyenne par canal ramenée à ~0 sur la séquence.
+    assert float(abs(feats.mean(axis=0)).max()) < 1e-4
+    # Déterministe (aucun dither) : deux appels identiques.
+    assert (feats == fbank_features(audio)).all()
+    # Sans CMN : log-mel à l'échelle kaldi (échantillons 16 bits), valeurs finies.
+    raw = fbank_features(audio, cmn=False)
+    assert np.isfinite(raw).all() and float(raw.max()) > float(raw.min())
+    # Nombre de canaux paramétrable (déduit du graphe ONNX en usage réel).
+    assert fbank_features(audio, n_mels=40).shape == (98, 40)
+    # Segment plus court qu'une fenêtre → None (repli, jamais d'exception).
+    assert fbank_features(np.zeros(100, np.float32)) is None
+    print("[31] diarisation ONNX : features fbank kaldi en pur NumPy  OK")
+
+
+def test_diarization_onnx_backend(tmp_path: Path) -> None:
+    """CO-19 : embedder ONNX (CPU imposé) + repli gracieux, via doublure onnxruntime."""
+    import numpy as np
+
+    from whisperty.config import SpeakerDiarizationConfig
+    from whisperty.diarization import Diarizer, OnnxEmbedder, speaker_embedding
+
+    base = tmp_path or Path(__file__).resolve().parent
+    model = base / "fake-speaker-embedding.onnx"
+    model.write_bytes(b"onnx-stub")           # le contenu n'importe pas (session doublée)
+    audio = np.full(16_000, 0.2, np.float32)
+
+    # (a) Empreinte ONNX : L2-normalisée, CPU EP IMPOSÉ, télémétrie coupée, options durcies.
+    record: dict = {}
+    with _fake_onnxruntime(record):
+        embedder = OnnxEmbedder(model)
+        # Le constructeur valide le contrat d'entrée par une inférence à blanc sur un
+        # signal SYNTHÉTIQUE (sinon un modèle incompatible échouerait à chaque segment).
+        assert record["runs"] == 1
+        vec = embedder(audio)
+    assert record["runs"] == 2
+    assert record["providers"] == ["CPUExecutionProvider"], record["providers"]
+    assert record.get("telemetry_off") is True
+    assert record["options"].enable_profiling is False
+    assert record["options"].intra_op_num_threads == 1
+    assert vec is not None and abs(float(np.linalg.norm(vec)) - 1.0) < 1e-5
+    # Features transmises au graphe : (batch, trames, canaux du modèle).
+    assert record["feeds"]["feats"].shape == (1, 98, 80)
+    assert "feats_length" not in record["feeds"]          # graphe à une seule entrée
+
+    # (b) Graphe à deux entrées (longueur de séquence) et canaux mel déduits du graphe.
+    record2: dict = {}
+    with _fake_onnxruntime(record2, n_mels=40, two_inputs=True):
+        vec2 = OnnxEmbedder(model)(audio)
+    assert vec2 is not None
+    assert record2["feeds"]["feats"].shape == (1, 98, 40)
+    assert int(record2["feeds"]["feats_length"][0]) == 98
+
+    # (c) Segment trop court → None (repli étiquette de source, BR-08) sans appeler le
+    #     modèle : le compteur reste à la seule inférence de validation du constructeur.
+    record3: dict = {}
+    with _fake_onnxruntime(record3):
+        assert OnnxEmbedder(model)(np.zeros(100, np.float32)) is None
+    assert record3["runs"] == 1
+
+    # (c bis) Modèle qui CHARGE mais refuse les features (contrat d'entrée incompatible) :
+    #         doit lever AU CONSTRUCTEUR → repli notifié avant la session, pas une trace
+    #         par segment pendant toute la réunion.
+    record3b: dict = {}
+    with _fake_onnxruntime(record3b, raise_on_run=True):
+        try:
+            OnnxEmbedder(model)
+        except Exception:  # noqa: BLE001 — attendu
+            pass
+        else:
+            raise AssertionError("un modèle incompatible doit être refusé au chargement")
+
+    # (d) Diarizer backend=onnx : embedder ONNX retenu + SEUIL DÉDIÉ appliqué.
+    cfg = SpeakerDiarizationConfig(
+        enabled=True, backend="onnx", onnx_model=str(model),
+        similarity_threshold=0.75, onnx_similarity_threshold=0.55, min_segment=0.0,
+    )
+    record4: dict = {}
+    with _fake_onnxruntime(record4):
+        diar = Diarizer(cfg, 16_000, model_path=model)
+        assert diar.backend == "onnx" and diar.notice is None
+        assert diar._registry._threshold == 0.55
+        key = diar.identify(audio, "mic", "Moi")
+    # 2 inférences : la validation du contrat au chargement, puis le segment.
+    assert key == "spk:0" and record4.get("runs") == 2
+
+    # (e) Modèle ABSENT → repli MFCC, notice utilisateur, session jamais ouverte.
+    missing = SpeakerDiarizationConfig(
+        enabled=True, backend="onnx", onnx_model=str(base / "pas-la.onnx"), min_segment=0.0,
+    )
+    record5: dict = {}
+    with _fake_onnxruntime(record5):
+        diar2 = Diarizer(missing, 16_000, model_path=base / "pas-la.onnx")
+    assert diar2.backend == "mfcc"
+    assert diar2.notice and "Configuration" in diar2.notice
+    assert diar2._registry._threshold == 0.75          # seuil MFCC restauré
+    assert record5 == {}                               # aucune session ouverte
+    assert diar2._embed is speaker_embedding
+    # La diarisation reste FONCTIONNELLE en repli (jamais d'omission, BR-08).
+    assert diar2.identify(audio, "mic", "Moi") in ("spk:0", "Moi")
+
+    # (f) onnxruntime INDISPONIBLE (exe sans la pile) → repli MFCC notifié.
+    previous = sys.modules.get("onnxruntime")
+    sys.modules["onnxruntime"] = None                  # force ImportError
+    try:
+        diar3 = Diarizer(cfg, 16_000, model_path=model)
+    finally:
+        if previous is not None:
+            sys.modules["onnxruntime"] = previous
+        else:
+            sys.modules.pop("onnxruntime", None)
+    assert diar3.backend == "mfcc" and diar3.notice
+    assert diar3._embed is speaker_embedding
+
+    # (g) Backend inconnu dans la config → MFCC (tolérance, aucune erreur).
+    weird = SpeakerDiarizationConfig(enabled=True, backend="quantique", min_segment=0.0)
+    assert Diarizer(weird, 16_000).backend == "mfcc"
+    model.unlink()
+    print("[32] diarisation ONNX : CPU EP imposé, seuil dédié, replis (modèle/pile/backend)  OK")
+
+
+def test_conference_diarization_backend_notice(tmp_path: Path) -> None:
+    """CO-19 : `_make_diarizer` résout le chemin du modèle et RELAIE la notice de repli."""
+    from whisperty.config import Config
+    from whisperty.conference import ConferenceTranscriber
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.distinguish_speakers = True
+    cfg.conference.speaker_diarization.enabled = True
+    cfg.conference.speaker_diarization.backend = "onnx"
+    cfg.conference.speaker_diarization.onnx_model = "models/absent.onnx"
+
+    notices: list = []
+    ct = ConferenceTranscriber(cfg, object(), on_notice=lambda text, kind: notices.append((text, kind)))
+    ct._distinct = True
+    diar = ct._make_diarizer()
+    # Modèle absent : la session continue en MFCC (jamais de refus de réunion)…
+    assert diar is not None and diar.backend == "mfcc"
+    # … et l'utilisateur est AVERTI du changement de précision (pas seulement les logs).
+    assert notices and notices[0][1] == "warn" and "MFCC" in notices[0][0]
+
+    # Chemin vide : repli identique, sans lever (resolve("") ne doit pas être appelé).
+    cfg.conference.speaker_diarization.onnx_model = ""
+    notices.clear()
+    assert ct._make_diarizer().backend == "mfcc"
+    assert notices
+
+    # Backend mfcc (défaut) : aucune notice, aucun accès disque.
+    cfg.conference.speaker_diarization.backend = "mfcc"
+    notices.clear()
+    diar2 = ct._make_diarizer()
+    assert diar2 is not None and diar2.backend == "mfcc" and not notices
+    print("[33] réunion : backend de diarisation (chemin résolu, notice de repli relayée)  OK")
+
+
 def test_conference_payload(tmp_path: Path) -> None:
     """FR-31 : structure de session archivée — rendu pur, réécriture du fichier, _finish."""
     import json
@@ -2146,6 +2390,9 @@ def _run_all() -> None:
     test_conference_distinct(tmp)
     test_diarization_logic()
     test_conference_diarization(tmp)
+    test_diarization_fbank()
+    test_diarization_onnx_backend(tmp)
+    test_conference_diarization_backend_notice(tmp)
     test_conference_payload(tmp)
     test_rename_history_speaker_e2e(tmp)
     test_rename_history_speaker_concurrent(tmp)

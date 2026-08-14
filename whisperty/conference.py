@@ -252,12 +252,17 @@ class ConferenceTranscriber:
         transcriber,
         on_finished: Optional[Callable[[dict], None]] = None,
         on_segment: Optional[Callable[[str, str], None]] = None,
+        on_notice: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._config = config
         self.cfg = config.conference
         self.transcriber = transcriber
         self._on_finished = on_finished
         self._on_segment = on_segment
+        # Notice utilisateur (texte, genre) — sert au repli de backend de diarisation
+        # (CO-19) : un changement de qualité PERÇU ne doit pas rester dans les logs.
+        # Appelée depuis le thread qui démarre la session, aucun verrou tenu.
+        self._on_notice = on_notice
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._file = None
@@ -359,11 +364,22 @@ class ConferenceTranscriber:
         try:
             from .diarization import Diarizer
 
-            diarizer = Diarizer(sd, SAMPLE_RATE)
+            # Chemin du modèle ONNX résolu ICI (relatif à config.yaml) : `diarization`
+            # ne connaît pas `base_dir`. Vide = pas de modèle → repli MFCC signalé.
+            raw = str(getattr(sd, "onnx_model", "") or "")
+            model_path = self._config.resolve(raw) if raw else raw
+            diarizer = Diarizer(sd, SAMPLE_RATE, model_path=model_path)
             logger.info(
-                "Diarisation des locuteurs activée (max %s/source, seuil %.2f).",
-                getattr(sd, "max_speakers", "?"), getattr(sd, "similarity_threshold", 0.0),
+                "Diarisation des locuteurs activée (backend %s, max %s/source).",
+                diarizer.backend, getattr(sd, "max_speakers", "?"),
             )
+            # Repli de backend (modèle absent/illisible) : la précision change, donc
+            # notification utilisateur — hors verrou (appelé depuis start()).
+            if diarizer.notice and self._on_notice is not None:
+                try:
+                    self._on_notice(diarizer.notice, "warn")
+                except Exception:  # noqa: BLE001
+                    logger.exception("on_notice a levé une exception")
             return diarizer
         except Exception:  # noqa: BLE001 — jamais bloquant : repli sur la distinction par source
             logger.exception("Diarisation indisponible ; repli sur la distinction par source.")

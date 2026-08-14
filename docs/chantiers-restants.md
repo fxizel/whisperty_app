@@ -1,5 +1,8 @@
 # Chantiers restants — suite de l'audit du 13 août 2026
 
+> **Les trois chantiers de ce document sont LIVRÉS** (13-14 août 2026). Il ne reste
+> que les reliquats mineurs listés en fin de page. Voir `CHANGELOG.md`.
+
 Document de passation : les évolutions restantes du rapport d'audit, avec le
 contexte nécessaire pour les reprendre dans une session dédiée. Tout le reste du
 rapport (correctifs, durcissements, outillage, six pistes produit) est livré —
@@ -14,55 +17,17 @@ voir `CHANGELOG.md` (section « Non publié ») et les commits `affcb4a` → `d6
 > contrat get_config/saveConfig/apply_config_from_gui) et bench local « Tester sur
 > ce poste » (audio témoin généré en pur NumPy, `transcriber.bench_audio` +
 > `transcribe_bench` sans VAD, mode exclusif via la machine à états, polling
-> `bench_status`). Voir `CHANGELOG.md`.
+> `bench_status`). Le chantier « Backend de diarisation ONNX hors-ligne » (CO-19) a été
+> réalisé le 14 août 2026 — `diarization.OnnxEmbedder` + `fbank_features` (kaldi, pur
+> NumPy), CPU EP imposé, modèle WeSpeaker ResNet34-LM téléchargé en opt-in
+> (`modeldl.start_embedding_download`), sélecteur de précision dans l'écran
+> Configuration, repli MFCC notifié, attribution dans `NOTICE.md`. Voir `CHANGELOG.md`.
 
 **Prérequis de lecture avant de commencer** : `CLAUDE.md` (sections « Concurrence »
 et « Décisions d'architecture »), en particulier la contrainte cardinale zéro-réseau
 et la doctrine opt-in de `modeldl.py`/`cuda.py`. Les relectures `concurrency-reviewer`
 et `privacy-auditor` (agents du projet) sont à lancer après toute modification des
 fichiers qu'elles couvrent.
-
----
-
-## 1. Backend de diarisation ONNX hors-ligne (CO-19)
-
-**Valeur / effort** : moyenne-forte / élevé. Le plus gros chantier — à faire en
-dernier, dans une session dédiée.
-
-**Contexte.** La diarisation intégrée est une empreinte MFCC pur NumPy
-(`diarization.py`), 100 % locale, sans modèle. Sa précision est limitée (voix
-nettement différentes). L'embedder est ENFICHABLE : `Diarizer(embed_fn=…)` accepte
-une fonction `(audio_16k_float32) -> np.ndarray` L2-normalisée. CO-19
-(`docs/specifications/04-exigences-furps.md`) décrit ce backend comme optionnel
-futur ; la note d'UC-18 (`03-cas-utilisation.md`) aussi.
-
-**Design proposé.**
-- Modèle d'empreinte vocale ONNX (ex. famille speaker-embedding type ECAPA/campplus
-  exportée ONNX — vérifier LICENCE et disponibilité sur HF sans gating).
-  `onnxruntime` est DÉJÀ une dépendance transitive de faster-whisper (VAD Silero),
-  donc zéro dépendance nouvelle — mais vérifier qu'il est collecté dans l'exe figé
-  (spec PyInstaller) et rester sur le CPU EP (pas de DirectML/CUDA EP).
-- Téléchargement du modèle : DOCTRINE `modeldl.py` À L'IDENTIQUE (opt-in, bannière
-  ou bouton explicite, progression par polling, jamais silencieux, matérialisé dans
-  `models/` à côté de la config, garde hors-ligne levée le temps du téléchargement
-  puis reposée de façon déterministe — cf. le correctif récent de `modeldl._run`).
-- Config : `conference.speaker_diarization.backend: mfcc | onnx` (+ chemin du
-  modèle), défaut `mfcc` (rien à télécharger). Échec de chargement ONNX → repli
-  MFCC journalisé + notification (`_notify_user`), jamais bloquant (BR-08/RE-13).
-- Concurrence : l'empreinte reste calculée dans le worker `_diar_loop` (RE-14),
-  qui reçoit déjà file/diariseur/jeton de génération en arguments — passer le
-  backend au constructeur du `Diarizer` de session, rien d'autre à changer.
-- Confidentialité : lancer `privacy-auditor` sur le diff (nouveau chemin de
-  téléchargement + inférence locale) ; télémétrie onnxruntime déjà coupée
-  (`transcriber._disable_ort_telemetry` — vérifier qu'elle couvre aussi ce chemin
-  si onnxruntime est importé par `diarization.py` avant `transcriber`).
-
-**Critères d'acceptation.** `backend: onnx` sans modèle → proposition de
-téléchargement opt-in, puis fonctionnement 100 % hors-ligne ; voix proches mieux
-séparées que le MFCC sur un test manuel ; `backend: mfcc` (défaut) inchangé ;
-exe figé fonctionnel avec et sans le modèle.
-
----
 
 ## Divers (reliquats mineurs de l'audit, à glisser dans n'importe quelle session)
 

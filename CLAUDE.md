@@ -58,7 +58,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `loopback.py` | Capture loopback d'une sortie audio (soundcard/WASAPI, local) | fait (V2) |
 | `live.py` | Transcription live continue d'une sortie (segmenteur VAD + sink) | fait (V2) |
 | `conference.py` | Mode réunion : micro + sortie système simultanés (mixage itér. 1 / distinction source itér. 2 / diarisation locuteur itér. 3, UC-18) | fait (V2) |
-| `diarization.py` | Diarisation des locuteurs (UC-18) : empreinte MFCC **pur NumPy** + clustering en ligne, 100 % local, zéro modèle/réseau | fait (V2) |
+| `diarization.py` | Diarisation des locuteurs (UC-18) : empreinte MFCC **pur NumPy** (défaut, zéro modèle/réseau) ou modèle **ONNX local** (CO-19, opt-in, CPU seul) + clustering en ligne, 100 % local | fait (V2) |
 | `gui.py` | Fenêtre native (WebView2 via pywebview) : pont Python↔JS (`GuiApi`) vers la machine à états, la config et l'historique | fait (V2) |
 | `configio.py` | Écriture **chirurgicale** de `config.yaml` (préserve commentaires/ordre, sans ruamel) | fait (V2) |
 | `modeldl.py` | Téléchargement **opt-in** du modèle Whisper depuis l'UI (bannière dashboard ; doctrine de `cuda.py`) | fait (V2) |
@@ -139,6 +139,21 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   `config.yaml` (écran Configuration + fin de téléchargement du modèle) — verrou **feuille**.
   `WhispertyApp._bench_lock` (état du bench local, publié par le worker, lu par
   `GuiApi.bench_status` en polling) est un verrou **feuille**, même modèle que `_notice_lock`.
+  `modeldl._embedding_downloader._lock` (modèle de diarisation, CO-19) suit le même modèle
+  que celui du modèle Whisper : feuille effective, avec l'arête inter-modules
+  `Transcriber._load_lock` → `_embedding_downloader._lock` (via `download_running()`), JAMAIS
+  l'inverse. ⚠️ `_DownloadState._lock` est un `Lock` NON réentrant : ne JAMAIS appeler
+  `_set_offline_env` (qui consulte `download_running()`) en le tenant. Threads dédiés :
+  `model-download` et `diar-model-download` (téléchargements), tous deux exécutant leur
+  `on_success` HORS verrou (d'où `configio._WRITE_LOCK` puis `_notice_lock` ensuite).
+- **Diarisation ONNX — session et caches (V2, CO-19)** : la session onnxruntime est créée
+  sur le thread qui démarre la réunion (`Diarizer.__init__` via `ConferenceTranscriber.start`,
+  aucun verrou tenu — l'import à froid peut coûter ~1 s) puis utilisée **exclusivement** par
+  le worker `_diar_loop` ; une session par session de réunion, donc jamais partagée entre
+  threads (pas de COM par thread à gérer, contrairement à `soundcard`). Les caches de bancs
+  de filtres de `diarization.py` (`_FILTERBANK_CACHE`, `_DCT_CACHE`, `_KALDI_FB_CACHE`) sont
+  écrits **sans verrou** : publication par affectation d'une clé unique, calcul idempotent,
+  tableaux jamais mutés ensuite (au pire un double calcul si un worker orphelin coexiste).
   `Transcriber._load_lock`, `modeldl._Downloader._lock` et `cuda._Installer._lock` sont des
   feuilles effectives. Seul ordre inter-modules : `_load_lock` → `downloader._lock` (via
   `transcriber._model_download_running`, qui diffère la repose de la garde hors-ligne pendant un
@@ -261,9 +276,26 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   réémet le flux via `render_lines()`, l'export/historique se rendent depuis les mêmes clés à l'arrêt).
   **Repli gracieux (BR-08/RE-13)** : segment trop court/silencieux/erreur → étiquette de source, jamais
   d'omission ni d'arrêt. `SpeakerRegistry` est un **verrou feuille** (`assign` depuis `_diar_loop`,
-  `rename`/`speakers` depuis le pont GUI). Ancienne note : la diarisation par modèle neuronal (pyannote)
-  reste **écartée** ; l'empreinte NumPy la remplace comme backend par défaut, une option ONNX hors-ligne
-  restant envisageable (désactivée par défaut).
+  `rename`/`speakers` depuis le pont GUI). `pyannote` reste **écarté** (PyTorch + modèles *gated*).
+- **Diarisation — backend ONNX (V2, CO-19, opt-in)** : `speaker_diarization.backend: mfcc | onnx`
+  (défaut `mfcc`). En `onnx`, `diarization.OnnxEmbedder` remplace l'empreinte MFCC (branché par
+  `Diarizer` via le même `embed_fn` — le reste de la chaîne est inchangé). ⚠️ **`providers=
+  ("CPUExecutionProvider",)` OBLIGATOIRE** : les roues onnxruntime récentes exposent AUSSI
+  `AzureExecutionProvider` (inférence DÉPORTÉE) — laisser onnxruntime choisir ouvrirait un chemin
+  réseau. Télémétrie coupée (`_disable_ort_telemetry`, factorisée dans `transcriber` pour couvrir les
+  DEUX chemins d'import) et profilage désactivé. Entrée = **fbank kaldi 80 canaux en pur NumPy**
+  (`fbank_features`) : ⚠️ le banc mel se construit sur `n_fft//2` bins (bin de Nyquist IGNORÉ, colonne
+  de zéros ajoutée) et le plancher du log est `eps` float32 — un banc sur 257 bins ou un plancher
+  `tiny` dégraderaient silencieusement les empreintes. Modèle = WeSpeaker ResNet34-LM (dépôt HF
+  public, CC-BY-4.0 → **attribution dans `NOTICE.md`**), téléchargé **opt-in** par
+  `modeldl.start_embedding_download` (mêmes garanties que le modèle Whisper ; dossier de travail
+  temporaire pour que la progression n'englobe pas le modèle Whisper, mise en place par `os.replace`).
+  ⚠️ `modeldl.download_running()` **agrège les deux téléchargements** et `transcriber.
+  _model_download_running` l'appelle : sans cela, reposer la garde hors-ligne ferait échouer un
+  téléchargement en vol. Échec de chargement → **repli MFCC notifié** (`Diarizer.notice` →
+  `ConferenceTranscriber._on_notice` → `_notify_user`), décidé AVANT le début de la session.
+  Seuil DÉDIÉ (`onnx_similarity_threshold`, 0,45 calibré sur des enregistrements réels) : l'échelle
+  de similarité n'est pas celle du MFCC (0,75), réutiliser ce dernier créerait un locuteur par segment.
 - **Interface fenêtre (V2, `gui.py` + `web/`)** : la maquette HTML est rendue par **Edge WebView2**
   via `pywebview` (préinstallé sur Win10/11). `pywebview` est une **dépendance optionnelle** : absente
   (ou WebView2 indisponible), l'app retombe sur le **mode tray seul** historique (`gui.enabled: false`

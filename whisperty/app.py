@@ -147,6 +147,9 @@ class WhispertyApp:
             self.transcriber,
             on_finished=self._on_conference_finished,
             on_segment=self._on_conference_segment,
+            # Repli du backend de diarisation (CO-19) : notice visible, pas seulement
+            # journalisée (_notice_lock est un verrou feuille, appel sans verrou tenu).
+            on_notice=self._notify_user,
         )
         live_devices = list_speakers()  # best-effort (liste vide si soundcard absent)
         self.tray = Tray(
@@ -671,6 +674,87 @@ class WhispertyApp:
         self._reload_model()  # rechargement paresseux + préchauffe si l'app est au repos
         self._notify_user(f"Modèle « {size} » installé — la dictée est prête.", "info")
 
+    # -- modèle de diarisation ONNX (CO-19) --------------------------------------
+    def diar_model_status(self) -> dict:
+        """État du backend de diarisation pour l'écran Configuration.
+
+        ``{backend, installed, sizeLabel, download}`` : backend configuré, présence du
+        modèle sur le disque, poids du téléchargement et état de celui-ci (polling,
+        même modèle que ``gpu_status``/``model_status``).
+        """
+        sd = self.config.conference.speaker_diarization
+        raw = str(getattr(sd, "onnx_model", "") or "")
+        installed = False
+        if raw:
+            try:
+                installed = self.config.resolve(raw).is_file()
+            except OSError:  # chemin invalide dans la config : traité comme absent
+                installed = False
+        return {
+            "backend": str(getattr(sd, "backend", "mfcc") or "mfcc").lower(),
+            "installed": installed,
+            "sizeLabel": modeldl.embedding_size_label(),
+            "download": modeldl.embedding_status(),
+        }
+
+    def start_diar_model_download(self) -> dict:
+        """Télécharge le modèle d'empreinte vocale (opt-in explicite, CO-19).
+
+        Même doctrine que le modèle Whisper et les composants GPU : déclenché par un
+        clic, jamais silencieux, progression par polling, puis 100 % hors-ligne. Le
+        modèle est matérialisé dans ``models/`` à côté de la config et celle-ci est
+        pointée dessus (``backend: onnx``) à la réussite.
+        """
+        # Backend au moment du clic : si l'utilisateur change d'avis PENDANT le
+        # téléchargement (retour sur « Intégré » + Enregistrer), son choix récent
+        # primera — cf. _on_diar_model_downloaded.
+        sd = self.config.conference.speaker_diarization
+        backend_at_start = str(getattr(sd, "backend", "mfcc") or "mfcc").lower()
+        return modeldl.start_embedding_download(
+            self.config.resolve("models"),
+            lambda path: self._on_diar_model_downloaded(path, backend_at_start),
+        )
+
+    def _on_diar_model_downloaded(
+        self, path: object, backend_at_start: str = "mfcc",
+    ) -> None:
+        """Active le backend ONNX après téléchargement (thread du téléchargement).
+
+        La session de réunion SUIVANTE en bénéficie : le diariseur est construit au
+        démarrage de chaque session (``_make_diarizer``), rien à recharger ici.
+
+        Le chemin du modèle est toujours enregistré. Le BACKEND ne l'est que si
+        l'utilisateur ne l'a pas modifié entre-temps (``apply_config_from_gui`` tourne
+        sur le thread du pont) : sans cette garde, un « Intégré » enregistré pendant
+        le téléchargement serait écrasé par ce callback (mise à jour perdue).
+        """
+        from .configio import update_yaml_file
+
+        rel = f"models/{modeldl.EMBEDDING_DEST_NAME}"
+        sd = self.config.conference.speaker_diarization
+        sd.onnx_model = rel
+        updates = {"conference.speaker_diarization.onnx_model": rel}
+        current = str(getattr(sd, "backend", "mfcc") or "mfcc").lower()
+        if current == backend_at_start:
+            sd.backend = "onnx"
+            updates["conference.speaker_diarization.backend"] = "onnx"
+        else:
+            logger.info(
+                "Backend de diarisation modifié pendant le téléchargement (%s) : "
+                "choix de l'utilisateur conservé.", current,
+            )
+        try:
+            update_yaml_file(self.config.resolve("config.yaml"), updates)
+        except OSError:
+            # Non bloquant : le backend est actif pour CETTE session ; la persistance
+            # pourra être refaite depuis l'écran Configuration.
+            logger.exception("Écriture de config.yaml échouée après le téléchargement ONNX")
+        self._notify_user(
+            "Modèle de diarisation installé — les prochaines réunions distingueront "
+            "les locuteurs plus finement.",
+            "info",
+        )
+
     # -- notes en session (UC-16) ------------------------------------------------
     def add_note(self, text: object = None, stamp: object = None) -> dict:
         """Crée une note utilisateur pendant une session live/réunion (UC-16).
@@ -894,7 +978,11 @@ class WhispertyApp:
             return
         # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
         self._reset_live_transcript()
-        # Rappel consentement (tout reste local).
+        # Rappel consentement (tout reste local). NB : le démarrage ci-dessous peut
+        # publier une notice de repli de backend de diarisation (CO-19) dans le même
+        # tick de polling ; le TOAST de la fenêtre n'en affiche alors qu'une seule (le
+        # repli, plus rare et plus actionnable). Les deux notifications système, elles,
+        # sont bien émises : ce rappel n'est jamais perdu.
         self._notify_user(
             "Réunion : pensez au consentement des participants. Tout reste local.", "info"
         )
@@ -1354,6 +1442,15 @@ class WhispertyApp:
                 if prefix != sd.label_prefix:
                     sd.label_prefix = prefix
                     updates["conference.speaker_diarization.label_prefix"] = prefix
+            # Backend d'empreinte vocale (CO-19). Liste blanche : une valeur inconnue
+            # est ignorée. Choisir « onnx » sans modèle sur le disque reste sans danger
+            # (repli MFCC notifié au démarrage de la réunion), mais l'UI propose le
+            # téléchargement pour éviter cette déception.
+            if "diarBackend" in payload:
+                backend = str(payload["diarBackend"] or "").strip().lower()
+                if backend in ("mfcc", "onnx") and backend != sd.backend:
+                    sd.backend = backend
+                    updates["conference.speaker_diarization.backend"] = backend
         except (TypeError, ValueError):
             logger.exception("Réglages invalides reçus de l'interface")
             return {"ok": False, "error": "Réglages invalides."}

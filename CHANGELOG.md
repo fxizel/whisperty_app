@@ -8,6 +8,16 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ### Ajouté
 
+- **Diarisation des locuteurs plus précise, par modèle local** (option) : en mode
+  Conférence, l'écran Configuration propose désormais deux niveaux de précision pour la
+  distinction des voix. « Intégré » (défaut, inchangé) calcule l'empreinte vocale sur la
+  machine sans rien télécharger. « Modèle local » utilise un modèle de vérification du
+  locuteur (~26 Mo, WeSpeaker ResNet34) téléchargeable **en un clic** depuis l'écran, puis
+  n'accède plus jamais au réseau ; il sépare nettement mieux les voix proches (sur un
+  enregistrement de test réel à quatre participants, il retrouve les quatre voix quand
+  l'empreinte intégrée n'en distingue aucune). Inférence **CPU uniquement**, télémétrie
+  coupée. Modèle absent ou illisible : la réunion se déroule normalement avec l'empreinte
+  intégrée et l'utilisateur en est averti. Attribution du modèle dans `NOTICE.md`.
 - **Préréglages de performance** (écran Configuration) : trois boutons — « Rapide »
   (base + int8), « Équilibré » (medium + int8), « Précis » (large-v3, float16 si CUDA
   est sélectionné) — remplissent les champs existants ; l'application passe par

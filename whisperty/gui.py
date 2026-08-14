@@ -425,6 +425,8 @@ class GuiApi:
             "diarization": bool(c.conference.speaker_diarization.enabled),
             "maxSpeakers": int(c.conference.speaker_diarization.max_speakers),
             "labelPrefix": str(c.conference.speaker_diarization.label_prefix or "Locuteur"),
+            # Backend d'empreinte vocale (CO-19) : mfcc (défaut) | onnx.
+            "diarBackend": str(c.conference.speaker_diarization.backend or "mfcc").lower(),
         }
 
     def save_config(self, payload: Optional[dict]) -> dict:
@@ -471,6 +473,27 @@ class GuiApi:
             logger.exception("Lecture de l'état GPU échouée")
             return {"gpu": False, "components": False, "canInstall": False,
                     "install": "idle", "message": ""}
+
+    # -- modèle de diarisation ONNX (CO-19) -------------------------------------
+    def diar_model_status(self) -> dict:
+        """État du backend de diarisation : {backend, installed, sizeLabel, download}."""
+        try:
+            return self._app.diar_model_status()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lecture de l'état du modèle de diarisation échouée")
+            return {"backend": "mfcc", "installed": False, "sizeLabel": "",
+                    "download": {"state": "idle", "message": "", "mb": 0}}
+
+    def download_diar_model(self) -> dict:
+        """Lance le téléchargement **opt-in** du modèle de diarisation (~26 Mo).
+
+        Explicitement déclenché par l'utilisateur, comme le modèle Whisper et les
+        composants GPU ; ensuite tout reste hors-ligne. Suivi par ``diar_model_status``."""
+        try:
+            return self._app.start_diar_model_download()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lancement du téléchargement de diarisation échoué")
+            return {"ok": False, "error": "Téléchargement impossible (voir logs)."}
 
     # -- bench local (préréglages de performance) -------------------------------
     def run_bench(self) -> dict:

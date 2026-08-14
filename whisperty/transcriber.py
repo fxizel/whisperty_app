@@ -154,6 +154,12 @@ def _model_download_running() -> bool:
     if mod is None:
         return False
     try:
+        # Agrège les DEUX téléchargements opt-in (modèle Whisper et modèle de
+        # diarisation ONNX, CO-19) : reposer la garde pendant l'un ou l'autre le
+        # ferait échouer. Repli sur l'état Whisper seul si la fonction manque.
+        checker = getattr(mod, "download_running", None)
+        if checker is not None:
+            return bool(checker())
         return mod.status().get("state") == "running"
     except Exception:  # noqa: BLE001 — simple consultation best-effort
         return False

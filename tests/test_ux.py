@@ -237,6 +237,190 @@ def test_downloader_failure_paths(tmp_path: Path) -> None:
     print("[ux 7] modeldl : échec réseau / activation / taille inconnue  OK")
 
 
+def _fake_hf_hub(download_impl):
+    """Doublure ``huggingface_hub.hf_hub_download`` (zéro réseau) ; état à restaurer."""
+    fake = types.ModuleType("huggingface_hub")
+    fake.hf_hub_download = download_impl
+    saved = {"huggingface_hub": sys.modules.get("huggingface_hub")}
+    sys.modules["huggingface_hub"] = fake
+    return saved
+
+
+def test_embedding_downloader(tmp_path: Path) -> None:
+    """CO-19 : téléchargement opt-in du modèle de diarisation (succès, échecs, garde)."""
+    from whisperty.transcriber import _offline_env_set, _set_offline_env
+
+    seen: dict = {}
+    # Taille attendue réduite le temps du test (le vrai modèle pèse 26 Mo : inutile de
+    # les écrire sur le disque pour valider la logique).
+    real_bytes = modeldl.EMBEDDING_BYTES
+    modeldl.EMBEDDING_BYTES = 2_000
+
+    def fake_download(repo_id=None, filename=None, revision=None, local_dir=None, token=None):
+        seen["args"] = (repo_id, filename, local_dir)
+        seen["revision"] = revision
+        seen["token"] = token
+        # La garde hors-ligne doit être LEVÉE pendant le téléchargement, sinon
+        # huggingface_hub refuserait la requête.
+        seen["offline_during"] = os.environ.get("HF_HUB_OFFLINE")
+        out = Path(local_dir) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"z" * modeldl.EMBEDDING_BYTES)
+        return str(out)
+
+    saved = _fake_hf_hub(fake_download)
+    _set_offline_env(True)                    # état de départ : hors-ligne (défaut)
+    try:
+        dl = modeldl._EmbeddingDownloader()
+        activated: dict = {}
+        dl._run(tmp_path, tmp_path / modeldl._EMBEDDING_TMP_DIR,
+                lambda path: activated.update(path=path))
+        st = dl.status()
+        assert st["state"] == "done", st
+        # Modèle en place sous son nom canonique, dossier de travail nettoyé.
+        dest = tmp_path / modeldl.EMBEDDING_DEST_NAME
+        assert dest.is_file() and dest.stat().st_size == modeldl.EMBEDDING_BYTES
+        assert not (tmp_path / modeldl._EMBEDDING_TMP_DIR).exists()
+        assert activated["path"] == dest
+        # Dépôt PUBLIC et fichier attendus.
+        assert seen["args"][0] == modeldl.EMBEDDING_REPO
+        assert seen["args"][1] == modeldl.EMBEDDING_FILE
+        # Révision ÉPINGLÉE (binaire figé) et jeton EXPLICITEMENT refusé : le dépôt est
+        # public, un jeton présent sur la machine rendrait le téléchargement
+        # nominativement attribuable sans aucun bénéfice.
+        assert seen["revision"] == modeldl.EMBEDDING_REVISION
+        assert seen["token"] is False
+        assert seen["offline_during"] is None          # garde bien levée pendant
+        # …et REPOSÉE de façon déterministe après (zéro réseau à l'usage ensuite).
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    finally:
+        modeldl.EMBEDDING_BYTES = real_bytes
+        _restore_modules(saved)
+        for var in list(_offline_env_set):
+            os.environ.pop(var, None)
+            _offline_env_set.discard(var)
+
+    # Échec réseau → état error actionnable, garde reposée, rien de laissé en place.
+    def fail_download(repo_id=None, filename=None, revision=None, local_dir=None, token=None):
+        raise OSError("connexion coupée")
+
+    saved = _fake_hf_hub(fail_download)
+    _set_offline_env(True)
+    try:
+        dl = modeldl._EmbeddingDownloader()
+        dl._run(tmp_path / "b", tmp_path / "b" / modeldl._EMBEDDING_TMP_DIR, None)
+        st = dl.status()
+        assert st["state"] == "error" and "connexion" in st["message"]
+        assert not (tmp_path / "b" / modeldl.EMBEDDING_DEST_NAME).exists()
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    finally:
+        _restore_modules(saved)
+        for var in list(_offline_env_set):
+            os.environ.pop(var, None)
+            _offline_env_set.discard(var)
+
+    # Fichier de taille inattendue (transfert interrompu, mauvais fichier) → refusé :
+    # jamais de modèle inutilisable mis en place.
+    def short_download(repo_id=None, filename=None, revision=None, local_dir=None, token=None):
+        out = Path(local_dir) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x" * 10)
+        return str(out)
+
+    saved = _fake_hf_hub(short_download)
+    try:
+        dl = modeldl._EmbeddingDownloader()
+        dl._run(tmp_path / "c", tmp_path / "c" / modeldl._EMBEDDING_TMP_DIR, None)
+        assert dl.status()["state"] == "error"
+        assert not (tmp_path / "c" / modeldl.EMBEDDING_DEST_NAME).exists()
+    finally:
+        _restore_modules(saved)
+
+    # huggingface_hub absent (exe minimal) → message clair, jamais d'exception.
+    saved = {"huggingface_hub": sys.modules.get("huggingface_hub")}
+    sys.modules["huggingface_hub"] = None
+    try:
+        dl = modeldl._EmbeddingDownloader()
+        dl._run(tmp_path / "d", tmp_path / "d" / modeldl._EMBEDDING_TMP_DIR, None)
+        assert dl.status()["state"] == "error"
+        assert "huggingface_hub" in dl.status()["message"]
+    finally:
+        _restore_modules(saved)
+    print("[ux 8b] modeldl : modèle de diarisation (succès, échec, tronqué, garde)  OK")
+
+
+def test_download_running_aggregates() -> None:
+    """La garde hors-ligne ne doit pas être reposée pendant l'UN des téléchargements."""
+    from whisperty.transcriber import _model_download_running
+
+    assert modeldl.download_running() is False
+    assert _model_download_running() is False
+    # Simule un téléchargement de DIARISATION en cours (pas celui de Whisper) :
+    # sans l'agrégation, transcriber reposerait la garde et le ferait échouer.
+    modeldl._embedding_downloader._set("running", "…")
+    try:
+        assert modeldl.download_running() is True
+        assert _model_download_running() is True
+    finally:
+        modeldl._embedding_downloader._set("idle", "")
+    modeldl._downloader._set("running", "…")
+    try:
+        assert modeldl.download_running() is True
+    finally:
+        modeldl._downloader._set("idle", "")
+    assert modeldl.download_running() is False
+    print("[ux 8c] garde hors-ligne : agrégation des deux téléchargements opt-in  OK")
+
+
+def test_app_diar_model_status(tmp_path: Path) -> None:
+    """CO-19 : état exposé à l'UI + activation du backend après téléchargement."""
+    app, cfg = _make_app(tmp_path)
+    sd = cfg.conference.speaker_diarization
+    sd.backend = "mfcc"
+    sd.onnx_model = "models/speaker-embedding.onnx"
+
+    st = app.diar_model_status()
+    assert st["backend"] == "mfcc" and st["installed"] is False
+    assert "Mo" in st["sizeLabel"] and st["download"]["state"] == "idle"
+
+    # Modèle présent sur le disque → installed True (chemin résolu près de config.yaml).
+    model = tmp_path / "models" / "speaker-embedding.onnx"
+    model.parent.mkdir(parents=True, exist_ok=True)
+    model.write_bytes(b"onnx")
+    assert app.diar_model_status()["installed"] is True
+
+    # Chemin vide (config manuelle) : pas d'exception, simplement « absent ».
+    sd.onnx_model = ""
+    assert app.diar_model_status()["installed"] is False
+    sd.onnx_model = "models/speaker-embedding.onnx"
+
+    # Activation après téléchargement : config en mémoire ET config.yaml basculés.
+    (tmp_path / "config.yaml").write_text(
+        "conference:\n  speaker_diarization:\n    enabled: true  # garder ce commentaire\n",
+        encoding="utf-8",
+    )
+    app._on_diar_model_downloaded(model, backend_at_start="mfcc")
+    assert sd.backend == "onnx"
+    assert sd.onnx_model == f"models/{modeldl.EMBEDDING_DEST_NAME}"
+    written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "garder ce commentaire" in written              # écriture chirurgicale
+    d = yaml.safe_load(written)["conference"]["speaker_diarization"]
+    assert d["backend"] == "onnx" and d["onnx_model"].endswith(".onnx")
+    assert app.notice_rev() > 0 and "diarisation" in app.notice()["text"]
+    assert app.diar_model_status()["backend"] == "onnx"
+
+    # L'utilisateur revient à « Intégré » PENDANT le téléchargement (thread du pont) :
+    # son choix récent primait, le callback ne doit pas le réécraser (mise à jour perdue).
+    sd.backend = "mfcc"
+    sd.onnx_model = "models/vieux.onnx"
+    app._on_diar_model_downloaded(model, backend_at_start="onnx")
+    assert sd.backend == "mfcc"                            # choix utilisateur conservé
+    assert sd.onnx_model == f"models/{modeldl.EMBEDDING_DEST_NAME}"   # chemin quand même à jour
+    d = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert d["conference"]["speaker_diarization"]["backend"] == "onnx"  # pas réécrit
+    print("[ux 8d] app : état du modèle de diarisation + activation persistée  OK")
+
+
 def test_downloader_start_async(tmp_path: Path) -> None:
     """start() : passage en running, progression (Mo), refus de doublon, fin done."""
     gate = threading.Event()
@@ -620,6 +804,7 @@ def _run_all() -> None:
 
     tmp = Path(tempfile.mkdtemp(prefix="whisperty_ux_test_"))
     test_model_size_name_and_labels()
+    test_download_running_aggregates()
     test_singleinstance_posix_noop()
     test_singleinstance_fake_win32_roundtrip()
     test_singleinstance_api_failures_never_block()
@@ -632,6 +817,8 @@ def _run_all() -> None:
         test_process_generic_error_notified,
         test_downloader_success_and_activation,
         test_downloader_failure_paths,
+        test_embedding_downloader,
+        test_app_diar_model_status,
         test_downloader_start_async,
         test_app_model_status_and_download,
         test_on_model_downloaded_activates_and_persists,

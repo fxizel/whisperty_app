@@ -45,6 +45,10 @@ _OPTIONAL_PACKAGES = {"webview", "pythonnet", "clr_loader"}
 for package in (
     "faster_whisper",
     "ctranslate2",
+    # onnxruntime : VAD Silero de faster-whisper ET backend de diarisation ONNX
+    # (CO-19), tous deux importés PARESSEUSEMENT → explicite ici pour que les DLL
+    # natives soient embarquées quel que soit le chemin d'import.
+    "onnxruntime",
     "soxr",
     "sounddevice",
     "soundcard",

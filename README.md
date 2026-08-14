@@ -232,7 +232,7 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost) |
 | `profiles.py` · `winutil.py` | Profils par application + détection de l'app active (Win32) |
 | `loopback.py` · `live.py` | Capture loopback (soundcard/WASAPI) + transcription live |
-| `conference.py` · `diarization.py` | Mode réunion + diarisation des locuteurs (MFCC NumPy) |
+| `conference.py` · `diarization.py` | Mode réunion + diarisation des locuteurs (MFCC NumPy par défaut, modèle ONNX local en option) |
 | `gui.py` · `web/` | Fenêtre WebView2 (pywebview) + pont Python↔JS + assets UI |
 | `configio.py` | Écriture chirurgicale de `config.yaml` (préserve commentaires/ordre) |
 | `modeldl.py` | Téléchargement opt-in du modèle depuis l'UI (bannière du dashboard) |
@@ -240,3 +240,4 @@ Pipeline : raccourci → `recorder` → `transcriber` → post-traitement dictio
 
 Détails de conception et règles de concurrence : voir [`CLAUDE.md`](CLAUDE.md).
 Spécifications fonctionnelles : [`docs/specifications/`](docs/specifications/).
+Origine et licences des modèles (Whisper, diarisation) : [`NOTICE.md`](NOTICE.md).
