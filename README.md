@@ -1,6 +1,6 @@
 # 🎙️ Whisperty
 
-> **Dictée vocale 100 % locale pour Windows 10/11** — une alternative libre à Superwhisper,
+> **Dictée vocale 100 % locale pour Windows 10/11** — une alternative autohébergée à Superwhisper,
 > propulsée par OpenAI Whisper (`faster-whisper`).
 
 [![CI](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml/badge.svg)](https://github.com/fxizel/whisperty_app/actions/workflows/ci.yml)
@@ -44,7 +44,8 @@ flowchart LR
   fichier `config.yaml`. Modèle manquant ? La fenêtre propose de le télécharger en un clic.
   Relancer l'exe réaffiche la fenêtre (instance unique) ; erreurs et fins de session sont
   notifiées, pas enfouies dans les logs.
-- 🆓 **Libre et hackable** — Python pur, modules clairs, aucune dépendance propriétaire.
+- 🧰 **Hackable** — Python pur, modules clairs, aucune dépendance propriétaire.
+  Le code n'est pas publié sous licence libre à ce stade (tous droits réservés).
 
 ## Fonctionnalités
 
