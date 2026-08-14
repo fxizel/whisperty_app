@@ -90,6 +90,120 @@ def parse_stamp(stamp: Optional[str]) -> Optional[float]:
     return float(int(m.group(1)) * 60 + int(m.group(2)))
 
 
+def render_notes_recap(notes: list, fmt: str) -> str:
+    """Section récapitulative « Notes » de fin de transcript (FR-26). Logique pure."""
+    heading = "\n## Notes\n\n" if fmt == "md" else "\n# Notes\n"
+    return heading + "".join(
+        format_segment_line(elapsed, text) + "\n" for elapsed, text in notes
+    )
+
+
+def render_payload_lines(payload: dict) -> list[str]:
+    """Lignes du transcript re-rendues depuis une structure de session archivée (FR-31).
+
+    Les libellés sont résolus au rendu depuis le registre embarqué (``speakers``) —
+    le renommage post-session est donc rétroactif, comme en session. Une clé absente
+    du registre (étiquette de source, « Note », repli BR-08) est affichée telle
+    quelle. Le payload vient de la base : les lignes malformées sont ignorées, jamais
+    d'exception (logique pure, testable hors-ligne).
+    """
+    labels: dict[str, str] = {}
+    for spk in payload.get("speakers") or []:
+        if isinstance(spk, dict) and spk.get("key"):
+            key = str(spk["key"])
+            name = " ".join(str(spk.get("name") or "").split())
+            labels[key] = name or str(spk.get("auto") or key)
+    records: list[tuple[float, Optional[str], str]] = []
+    for row in payload.get("segments") or []:
+        try:
+            start, key, text = float(row[0]), row[1], str(row[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        records.append((start, None if key is None else str(key), text))
+    records.sort(key=lambda record: record[0])
+    return [
+        format_segment_line(
+            start, text, speaker=(labels.get(key, key) if key is not None else None)
+        )
+        for start, key, text in records
+    ]
+
+
+def _payload_notes(payload: dict) -> list[tuple[float, str]]:
+    """Notes utilisateur d'une structure archivée, triées (malformées ignorées)."""
+    notes: list[tuple[float, str]] = []
+    for row in payload.get("notes") or []:
+        try:
+            notes.append((float(row[0]), str(row[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    notes.sort(key=lambda note: note[0])
+    return notes
+
+
+def render_payload_transcript(payload: dict) -> str:
+    """Contenu complet du fichier transcript (hors résumé UC-17) depuis une structure
+    de session archivée : en-tête d'origine, segments triés, récapitulatif des notes."""
+    fmt = "md" if payload.get("format") == "md" else "txt"
+    header = str(payload.get("header") or "") or _transcript_header(
+        payload.get("device"), str(payload.get("mic") or ""), fmt
+    )
+    parts = [header]
+    parts.extend(line + "\n" for line in render_payload_lines(payload))
+    notes = _payload_notes(payload)
+    if notes:
+        parts.append(render_notes_recap(notes, fmt))
+    return "".join(parts)
+
+
+def _summary_tail(content: str, fmt: str) -> str:
+    """Queue « Résumé » (UC-17) du fichier actuel, à préserver lors d'une réécriture
+    post-session (le résumé est ajouté APRÈS l'archivage : le payload ne le contient
+    pas). Les lignes de segments/notes commencent toujours par « [MM:SS] » : un titre
+    « Résumé » seul sur sa ligne ne peut venir que de l'ajout d'UC-17."""
+    heading = "\n## Résumé\n" if fmt == "md" else "\n# Résumé\n"
+    idx = content.find(heading)
+    return content[idx:] if idx >= 0 else ""
+
+
+def rewrite_payload_transcript(payload: dict) -> tuple[bool, str]:
+    """Réécrit le fichier transcript exporté depuis une structure de session archivée.
+
+    Renvoie ``(ok, détail)``. Dégradation propre (FR-31) : fichier jamais exporté,
+    déplacé ou supprimé → ``(False, raison)`` sans lever — l'entrée d'historique,
+    elle, reste mise à jour par l'appelant. Écriture atomique (fichier temporaire +
+    ``os.replace``, comme ``_rewrite_sorted``) ; la section « Résumé » (UC-17) déjà
+    présente dans le fichier est préservée.
+    """
+    path_str = payload.get("path") if isinstance(payload, dict) else None
+    if not path_str:
+        return False, "aucun fichier exporté pour cette session"
+    path = Path(str(path_str))
+    if not path.is_file():
+        return False, "fichier exporté introuvable (déplacé ou supprimé)"
+    fmt = "md" if payload.get("format") == "md" else "txt"
+    try:
+        tail = _summary_tail(path.read_text(encoding="utf-8"), fmt)
+    except (OSError, UnicodeDecodeError):
+        tail = ""  # fichier illisible : on réécrit sans queue plutôt que d'échouer
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(render_payload_transcript(payload))
+            if tail:
+                fh.write(tail)
+        os.replace(tmp, path)  # atomique : l'original n'est remplacé qu'en cas de succès
+        return True, ""
+    except OSError:
+        logger.warning("Réécriture post-session du transcript échouée.", exc_info=True)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        return False, "écriture du fichier échouée (voir logs)"
+
+
 def _transcript_header(device_sys: Optional[str], mic_label: str, fmt: str) -> str:
     when = datetime.now().isoformat(timespec="seconds")
     if fmt == "md":
@@ -169,6 +283,10 @@ class ConferenceTranscriber:
         self._fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
         self._device_sys: Optional[str] = None
         self._mic_label_header = ""
+        # En-tête écrit à l'ouverture du transcript, conservé pour les réécritures
+        # (tri à l'arrêt, renommage post-session) : sans lui, chaque réécriture
+        # régénérerait un en-tête daté du moment de la réécriture.
+        self._header = ""
         # Diarisation des locuteurs individuels (itération 3, UC-18). Construite par
         # session dans start() (numérotation stable sur la session) ; None = repli sur
         # la distinction par source. Le worker de diarisation (RE-14) draine _diar_queue.
@@ -208,6 +326,7 @@ class ConferenceTranscriber:
         # Relus par session (une modification de config n'exige pas de reconstruire l'objet).
         self._distinct = bool(getattr(self.cfg, "distinguish_speakers", False))
         self._fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
+        self._header = ""
         self._diar = self._make_diarizer()
         self._diar_queue = queue.Queue()
         self._session_gen += 1
@@ -740,13 +859,14 @@ class ConferenceTranscriber:
     # -- transcript ------------------------------------------------------------
     def _open_transcript(self, device_sys: Optional[str], mic_label: str) -> Optional[Path]:
         fmt = "md" if str(self.cfg.export_format).lower() == "md" else "txt"
+        self._header = _transcript_header(device_sys, mic_label, fmt)
         try:
             folder = self._config.resolve(self.cfg.export_dir)
             folder.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             path = folder / f"reunion_{stamp}.{fmt}"
             self._file = path.open("w", encoding="utf-8")
-            self._file.write(_transcript_header(device_sys, mic_label, fmt))
+            self._file.write(self._header)
             self._file.flush()
             return path
         except OSError:
@@ -774,10 +894,7 @@ class ConferenceTranscriber:
 
     def _notes_recap(self, notes: list) -> str:
         """Section récapitulative « Notes » de fin de transcript (FR-26)."""
-        heading = "\n## Notes\n\n" if self._fmt == "md" else "\n# Notes\n"
-        return heading + "".join(
-            format_segment_line(elapsed, text) + "\n" for elapsed, text in notes
-        )
+        return render_notes_recap(notes, self._fmt)
 
     def _rewrite_sorted(self, path: Optional[Path], ordered: list, notes: list) -> None:
         """Réécrit le transcript trié chronologiquement (entrelacement des deux sources,
@@ -790,7 +907,10 @@ class ConferenceTranscriber:
         tmp = path.with_name(path.name + ".tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(_transcript_header(self._device_sys, self._mic_label_header, self._fmt))
+                fh.write(
+                    self._header
+                    or _transcript_header(self._device_sys, self._mic_label_header, self._fmt)
+                )
                 for start, key, text in ordered:
                     fh.write(
                         format_segment_line(start, text, speaker=self._label_for(key)) + "\n"
@@ -808,6 +928,37 @@ class ConferenceTranscriber:
                     tmp.unlink()
             except OSError:
                 pass
+
+    def _session_payload(
+        self, ordered: list, notes: list, path: Optional[Path],
+    ) -> Optional[dict]:
+        """Structure de session archivable (FR-31), ou ``None`` hors diarisation.
+
+        Persistée dans l'historique (colonne ``payload``) pour permettre le renommage
+        des locuteurs APRÈS la session : segments à CLÉS (``spk:N``, étiquette de
+        source, « Note »), registre des libellés, chemin/format/en-tête du fichier
+        exporté. JSON-compatible. Never-fail (un échec prive du renommage post-session,
+        pas de l'archivage du texte).
+        """
+        if not self._distinct or self._diar is None:
+            return None
+        try:
+            return {
+                "type": "réunion",
+                "version": 1,
+                "segments": [[start, key, text] for start, key, text in ordered],
+                "speakers": [
+                    {"key": s["key"], "auto": s["auto"], "name": s["name"]}
+                    for s in self._diar.speakers()
+                ],
+                "notes": [[start, text] for start, text in notes],
+                "path": str(path) if path is not None else None,
+                "format": self._fmt,
+                "header": self._header,
+            }
+        except Exception:  # noqa: BLE001 — jamais bloquant à l'arrêt de session
+            logger.exception("Construction de la structure de session échouée")
+            return None
 
     def _finish(self, device_sys: Optional[str], path: Optional[Path]) -> None:
         # TOUTE la construction du résultat est protégée : une exception ici (ex.
@@ -847,6 +998,7 @@ class ConferenceTranscriber:
                 "notes": len(notes),
                 "path": str(path) if path is not None else None,
                 "error": self._error,
+                "payload": self._session_payload(ordered, notes, path),
             }
         except Exception:  # noqa: BLE001 — le callback de fin DOIT partir quoi qu'il arrive
             logger.exception("Construction du résultat de réunion échouée")
@@ -858,6 +1010,7 @@ class ConferenceTranscriber:
                 "notes": 0,
                 "path": str(path) if path is not None else None,
                 "error": self._error or "erreur interne à l'arrêt (voir logs)",
+                "payload": None,
             }
         callback = self._on_finished
         try:

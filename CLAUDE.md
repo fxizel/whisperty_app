@@ -51,7 +51,7 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
 | `app.py` | Orchestration / machine à états (RLock) + raccourci global + surveillance VAD + V2 (import audio, historique, IA, profils) | fait |
 | `config.py` | Chargement de `config.yaml` | fait |
 | `dictionary.py` | Chargement dictionnaire + corrections + édition assistée UC-19 (`parse_entries`/`update_dictionary_file`, préserve commentaires/ordre) | fait |
-| `history.py` | Historique des transcriptions (SQLite local, thread-safe) | fait (V2) |
+| `history.py` | Historique des transcriptions (SQLite local, thread-safe, schéma versionné `user_version`, payload de session pour le renommage post-session FR-31) | fait (V2) |
 | `ai.py` | Raffinage texte par LLM **local** (garde localhost, désactivé par défaut) | fait (V2) |
 | `profiles.py` | Profils de contexte par application (override prompt/langue/dico) | fait (V2) |
 | `winutil.py` | Détection de l'application active (ctypes Win32, local) | fait (V2) |
@@ -126,8 +126,19 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   les deux méthodes re-vérifient l'état sous `_lock` (entrelacement = no-op bénin). Même doctrine
   pour les notices : `_start_recording` renvoie son message micro après le bloc, `start_live`/
   `start_conference` notifient via un drapeau `busy` hors verrou.
+- **Sessions archivées (V2, FR-31/UC-17)** : `WhispertyApp._archive_lock` sérialise les
+  read-modify-write sur une session archivée (entrée d'historique + fichier transcript) —
+  la séquence get→re-rendu→`update_text`→réécriture fichier de `rename_history_speaker`
+  (un thread pywebview PAR appel du pont : deux renommages rapprochés se perdraient sinon
+  mutuellement, avec un `.tmp` partagé) ET l'ajout du résumé au fichier par
+  `_summarize_session` (E/S fichier SEULEMENT, jamais autour de l'appel LLM — sinon la
+  réécriture pourrait effacer un résumé ajouté entre sa lecture et son `os.replace`).
+  Ordre : `_archive_lock` → `History._lock` (feuille), JAMAIS l'inverse ; jamais imbriqué
+  avec `_lock` ; `_notify_user` appelé hors de ce verrou.
 - **Verrous utilitaires (V2)** : `configio._WRITE_LOCK` sérialise les read-modify-write de
   `config.yaml` (écran Configuration + fin de téléchargement du modèle) — verrou **feuille**.
+  `WhispertyApp._bench_lock` (état du bench local, publié par le worker, lu par
+  `GuiApi.bench_status` en polling) est un verrou **feuille**, même modèle que `_notice_lock`.
   `Transcriber._load_lock`, `modeldl._Downloader._lock` et `cuda._Installer._lock` sont des
   feuilles effectives. Seul ordre inter-modules : `_load_lock` → `downloader._lock` (via
   `transcriber._model_download_running`, qui diffère la repose de la garde hors-ligne pendant un
@@ -187,6 +198,19 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   déjà archivée, rien n'est perdu. Entrée tronquée début+fin au-delà de `summary.max_chars`.
 - **Historique (V2)** : `history.py` = SQLite local (`sqlite3` stdlib), connexion partagée
   `check_same_thread=False` mais **tous les accès passent par `History._lock`** ; écriture non bloquante.
+  Schéma **versionné** (`PRAGMA user_version`, migrations incrémentales dans `_migrate`, idempotentes,
+  jamais de DROP) ; index FTS synchronisé par triggers INSERT/DELETE/**UPDATE** (le renommage
+  post-session réécrit `text` par UPDATE — sans le trigger, la recherche divergerait).
+- **Renommage post-session des locuteurs (V2, FR-31, réunion diarisée)** : à l'arrêt, `conference.
+  _session_payload` publie la **structure de session** (segments à CLÉS `spk:N`/source/« Note »,
+  registre des libellés, chemin/format/**en-tête d'origine** du transcript) que `_on_conference_finished`
+  archive dans la colonne `payload` (JSON). `WhispertyApp.rename_history_speaker` (pont
+  `GuiApi.rename_history_speaker`, panneau du détail Historique) re-rend le texte depuis ces clés
+  (`conference.render_payload_lines`, pur), met à jour l'entrée (`History.update_text`) puis réécrit le
+  fichier exporté (`rewrite_payload_transcript`, atomique) en **préservant la section « Résumé »**
+  ajoutée après coup par UC-17. Fichier déplacé/supprimé = dégradation propre : historique mis à jour,
+  utilisateur notifié (`_notify_user`). Aucun verrou de la machine à états n'est pris ; la séquence
+  complète est sérialisée par `_archive_lock` (cf. section Concurrence).
 - **Profils (V2)** : surcharge `initial_prompt`/langue/dictionnaire selon l'app active, capturée
   par `winutil.foreground_app()` au **démarrage** de la dictée (= cible de l'injection).
 - **Loopback (V2)** : la capture d'une **sortie** audio passe par `soundcard` (WASAPI loopback) —
@@ -271,6 +295,20 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   *précédente*. À l'arrêt, la tuile bascule sur ce texte final d'historique (réunion : version triée).
   `_reset_live_transcript()` (appelé au démarrage de chaque live/réunion) vide le flux et bump `_live_rev`
   (la tuile repart de « En écoute… »). La doublure `Mock` de `app.js` simule ce flux (aperçu autonome).
+- **Préréglages de performance + bench local (V2, écran Configuration)** : trois préréglages
+  (« Rapide » base+int8, « Équilibré » medium+int8, « Précis » large-v3 + float16 si CUDA
+  sélectionné) remplissent les champs côté JS ; l'application passe par `apply_config_from_gui`.
+  Le `compute_type` n'a PAS de champ dédié mais fait partie du **contrat des 3 endroits**
+  (`get_config` → clé `compute`, payload `saveConfig`, `apply_config_from_gui` — liste blanche
+  int8/float16/int8_float16, valeur inconnue ignorée). Le bench (« Tester sur ce poste »,
+  `WhispertyApp.start_bench`) transcrit un audio témoin **généré localement**
+  (`transcriber.bench_audio`, pur NumPy, graine fixe — rien à télécharger, mesures comparables)
+  via `transcribe_bench` (**sans VAD** : Silero écarterait le signal synthétique et la mesure
+  tomberait à ~0 s). Mode **exclusif** via la machine à états (IDLE→PROCESSING→IDLE, comme
+  l'import audio — jamais en parallèle d'une dictée) ; il mesure la configuration ENREGISTRÉE
+  (modèle réellement chargé), pas les champs non sauvegardés ; progression par polling
+  `bench_status` (modèle `gpu_status`). Modèle manquant → statut d'erreur actionnable
+  (`_model_unavailable_message`), jamais d'exception.
 - **Écriture de config (V2, `configio.py`)** : l'écran Configuration enregistre via `update_yaml_file`
   (édition **ligne par ligne** préservant commentaires/ordre) — PAS `yaml.safe_dump` (détruirait les
   commentaires) ni `ruamel` (dépendance évitée). `apply_config_from_gui` mute les dataclasses en place
@@ -306,7 +344,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   la cible). `transcriber._resolve_model_arg()` résout un modèle « chemin » en **absolu** via `base_dir`
   (le CWD n'est pas fiable au démarrage auto / figé) ; un nom de taille reste passé tel quel. Variante
   `build.ps1 -NoModel` → `local_files_only: false` (le modèle, et la vérif de révision HF, passent par le
-  réseau au 1er usage) — d'où le bundling comme défaut conforme à la contrainte cardinale.
+  réseau au 1er usage — dictée, import audio ou bench « Tester sur ce poste », tous sur le même chemin
+  gardé de `load()`) — d'où le bundling comme défaut conforme à la contrainte cardinale.
 - **Défauts d'expédition (build.ps1)** : le `config.yaml` du dépôt reflète le POSTE DE DEV (CUDA,
   LLM local actif). `build.ps1` patche la copie expédiée vers des défauts neutres :
   `device: cpu`/`int8`, `ai.enabled: false`, `summary.enabled: false` (un poste vierge n'a ni

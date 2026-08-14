@@ -403,6 +403,10 @@ class GuiApi:
             # modèle local fonctionnel quand on enregistre sans changer de taille).
             "model": model_size_name(c.transcription.model),
             "device": (c.transcription.device or "cpu").upper(),
+            # compute_type : pas de champ dédié à l'écran, mais les préréglages de
+            # performance le pilotent (« Précis » = float16 si CUDA) et saveConfig
+            # le renvoie tel quel — il fait partie du contrat des 3 endroits.
+            "compute": (c.transcription.compute_type or "int8").lower(),
             "langue": "auto" if not lang else lang,
             "mic": c.audio.device,
             "mics": self._mic_options(),
@@ -468,6 +472,27 @@ class GuiApi:
             return {"gpu": False, "components": False, "canInstall": False,
                     "install": "idle", "message": ""}
 
+    # -- bench local (préréglages de performance) -------------------------------
+    def run_bench(self) -> dict:
+        """Lance le bench local (« Tester sur ce poste »). Non bloquant, zéro réseau.
+
+        L'audio témoin est GÉNÉRÉ localement (transcriber.bench_audio) ; la mesure
+        passe par la machine à états (mode exclusif, comme l'import audio) et l'UI
+        suit la progression par polling ``bench_status`` (cf. gpu_status)."""
+        try:
+            return self._app.start_bench()
+        except Exception:  # noqa: BLE001
+            logger.exception("Lancement du bench échoué")
+            return {"ok": False, "error": "Mesure impossible (voir logs)."}
+
+    def bench_status(self) -> dict:
+        """État du bench local : {state: idle|running|done|error, seconds, load, message}."""
+        try:
+            return self._app.bench_status()
+        except Exception:  # noqa: BLE001
+            return {"state": "error", "seconds": None, "load": None,
+                    "message": "État du bench illisible (voir logs)."}
+
     def install_gpu(self) -> dict:
         """Lance l'installation opt-in des composants GPU (~1,3 Go). Non bloquant.
 
@@ -484,6 +509,24 @@ class GuiApi:
             return {"ok": False, "error": "Installation impossible."}
 
     # -- historique ------------------------------------------------------------
+    @staticmethod
+    def _payload_speakers(payload: Optional[dict]) -> list:
+        """Locuteurs d'une réunion archivée pour l'UI (FR-31), [] sans diarisation.
+
+        Payload minimal : les SEGMENTS (potentiellement volumineux) restent côté
+        Python — le JS n'a besoin que du registre pour afficher le renommage.
+        """
+        if not isinstance(payload, dict):
+            return []
+        rows = []
+        for spk in payload.get("speakers") or []:
+            if isinstance(spk, dict) and spk.get("key"):
+                auto = str(spk.get("auto") or spk["key"])
+                name = str(spk.get("name") or "")
+                rows.append({"key": str(spk["key"]), "auto": auto, "name": name,
+                             "label": name or auto})
+        return rows
+
     def get_history(self) -> dict:
         try:
             limit = self._app.config.history.max_entries or 200
@@ -498,10 +541,26 @@ class GuiApi:
                 "source": e.source,
                 "text": e.text,
                 "sec": None,  # durée non stockée (cf. _today_stats)
+                # Réunion diarisée : locuteurs renommables après la session (FR-31).
+                "speakers": self._payload_speakers(e.payload),
             }
             for e in entries
         ]
         return {"total": len(items), "items": items}
+
+    def rename_history_speaker(
+        self, entry_id: Optional[str] = None, key: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> dict:
+        """Renomme un locuteur d'une réunion archivée (FR-31, post-session).
+
+        Rétroactif à froid : entrée d'historique re-rendue (recherche FTS à jour) et
+        fichier exporté réécrit s'il existe encore."""
+        try:
+            return self._app.rename_history_speaker(entry_id, key, name)
+        except Exception:  # noqa: BLE001
+            logger.exception("rename_history_speaker a échoué")
+            return {"ok": False, "error": "Renommage impossible (voir logs)."}
 
     def search_history(self, query) -> dict:
         """Recherche plein texte (FTS5, repli LIKE) — renvoie les ids correspondants.

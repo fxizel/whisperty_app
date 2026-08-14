@@ -231,11 +231,12 @@ def test_gui_api_shapes(tmp_path: Path) -> None:
     api = GuiApi(app)
 
     gc = api.get_config()
-    for k in ("model", "device", "langue", "mic", "mics", "vad", "silence",
+    for k in ("model", "device", "compute", "langue", "mic", "mics", "vad", "silence",
               "combo", "injection", "delai", "ia", "iaEndpoint", "iaModel", "localOnly",
               "resume", "distinguishSpeakers", "diarization", "maxSpeakers", "labelPrefix"):
         assert k in gc, k
     assert gc["device"] == "CPU" and gc["langue"] == "fr"
+    assert gc["compute"] == "int8"                 # préréglages : compute_type exposé
     assert gc["distinguishSpeakers"] is True
     assert gc["diarization"] is False
     assert gc["maxSpeakers"] == 6
@@ -312,6 +313,7 @@ def test_apply_config_from_gui(tmp_path: Path) -> None:
 
     res = app.apply_config_from_gui({
         "model": "large-v3", "device": "CUDA", "langue": "auto", "localOnly": False,
+        "compute": "float16",
         "vad": 33, "silence": 900, "mic": 2, "combo": "<ctrl>+<alt>+x",
         "injection": "frappe", "delai": 60,
         "ia": True, "iaEndpoint": "http://localhost:1234", "iaModel": "qwen2.5:3b",
@@ -321,6 +323,7 @@ def test_apply_config_from_gui(tmp_path: Path) -> None:
     # En mémoire
     assert cfg.transcription.model == "large-v3"
     assert cfg.transcription.device == "cuda"
+    assert cfg.transcription.compute_type == "float16"   # préréglage « Précis » + CUDA
     assert cfg.transcription.language is None      # auto -> None
     assert cfg.transcription.local_files_only is False
     assert abs(cfg.audio.vad_threshold - 0.033) < 1e-9
@@ -338,6 +341,7 @@ def test_apply_config_from_gui(tmp_path: Path) -> None:
     d = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
     assert d["transcription"]["model"] == "large-v3"
     assert d["transcription"]["device"] == "cuda"
+    assert d["transcription"]["compute_type"] == "float16"
     assert d["transcription"]["language"] is None
     assert d["output"]["method"] == "type"
     assert d["hotkey"]["combo"] == "<ctrl>+<alt>+x"
@@ -377,7 +381,87 @@ def test_apply_config_invalid_nonblocking(tmp_path: Path) -> None:
     assert res.get("ok") is False
     # La config reste cohérente (valeur par défaut conservée).
     assert cfg.audio.vad_threshold == 0.01
+    # compute_type hors liste blanche : IGNORÉ (pas d'erreur, valeur conservée).
+    res = app.apply_config_from_gui({"compute": "quantique-42"})
+    assert res.get("ok") is True
+    assert cfg.transcription.compute_type == "int8"
     print("[gui 8] apply_config_from_gui : entrée invalide gérée (non bloquant)  OK")
+
+
+def test_bench(tmp_path: Path) -> None:
+    """Bench local (préréglages) : audio témoin, mesure exclusive, statut par polling."""
+    import time
+    import types as _types
+
+    from whisperty.gui import GuiApi
+    from whisperty.transcriber import ModelNotAvailableError, bench_audio
+    from whisperty.tray import TrayState
+
+    # Audio témoin : généré localement, déterministe, borné (aucun réseau, aucun asset).
+    a1, a2 = bench_audio(), bench_audio()
+    assert a1.dtype.name == "float32" and a1.shape[0] == 4 * 16_000
+    assert float(abs(a1).max()) <= 0.31
+    assert (a1 == a2).all()                    # graine fixe = mesures comparables
+    assert bench_audio(1.0).shape[0] == 16_000
+
+    app, _cfg = _make_app(tmp_path)
+    api = GuiApi(app)
+    calls: dict = {}
+
+    class FakeModel:
+        def transcribe(self, audio, language=None, beam_size=None,
+                       initial_prompt=None, hotwords=None, vad_filter=None):
+            calls["vad"] = vad_filter
+            seg = _types.SimpleNamespace(text="ok", start=0.0, end=1.0)
+            return [seg], _types.SimpleNamespace(language=language)
+
+    app.transcriber._model = FakeModel()       # court-circuite load()
+
+    def _wait_status() -> dict:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            s = api.bench_status()
+            if s["state"] in ("done", "error"):
+                return s
+            time.sleep(0.02)
+        return api.bench_status()
+
+    def _wait_idle() -> None:
+        deadline = time.time() + 2.0
+        while time.time() < deadline and app._state is not TrayState.IDLE:
+            time.sleep(0.01)
+
+    # Forme du statut initial.
+    s0 = api.bench_status()
+    assert s0["state"] == "idle" and s0["seconds"] is None
+
+    # Mesure nominale : done + durée numérique, VAD coupé (signal synthétique), retour IDLE.
+    assert api.run_bench()["ok"] is True
+    s = _wait_status()
+    assert s["state"] == "done", s
+    assert isinstance(s["seconds"], float) and s["seconds"] >= 0.0
+    assert calls["vad"] is False
+    _wait_idle()
+    assert app._state is TrayState.IDLE
+
+    # Mode exclusif : refus si une dictée est en cours, état inchangé (jamais interrompue).
+    app._state = TrayState.RECORDING
+    res = api.run_bench()
+    assert res["ok"] is False and app._state is TrayState.RECORDING
+    app._state = TrayState.IDLE
+
+    # Modèle indisponible : statut d'erreur actionnable + retour IDLE, jamais d'exception.
+    def _raise():
+        raise ModelNotAvailableError("modèle absent")
+
+    app.transcriber._model = None
+    app.transcriber.load = _raise
+    assert api.run_bench()["ok"] is True
+    s = _wait_status()
+    assert s["state"] == "error" and s["message"]
+    _wait_idle()
+    assert app._state is TrayState.IDLE
+    print("[gui 10] bench local : audio témoin, mesure exclusive, busy, modèle absent  OK")
 
 
 def _run_all() -> None:
@@ -398,6 +482,7 @@ def _run_all() -> None:
         test_apply_config_from_gui,
         test_apply_config_conference_diarization,
         test_apply_config_invalid_nonblocking,
+        test_bench,
     ]):
         d = tmp / f"t{i}"
         d.mkdir(parents=True, exist_ok=True)

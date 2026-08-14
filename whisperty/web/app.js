@@ -9,7 +9,7 @@
 // ───────────────────────────── Couche données ──────────────────────────────
 const Mock = (() => {
   const cfg = {
-    model: "small", device: "CPU", langue: "fr",
+    model: "small", device: "CPU", langue: "fr", compute: "int8",
     mic: null,
     mics: [
       { value: null, label: "Microphone par défaut" },
@@ -47,9 +47,19 @@ const Mock = (() => {
   const sources = ["dictée", "live", "réunion"];
   const times = ["Aujourd'hui 15:42","Aujourd'hui 14:08","Aujourd'hui 11:23","Aujourd'hui 09:51","Hier 18:30","Hier 16:12","Hier 13:45","Hier 10:02","19 juin 17:20","19 juin 14:55","19 juin 09:30","18 juin 16:40","18 juin 11:15","17 juin 15:00","17 juin 10:48","16 juin 14:20","16 juin 09:05","15 juin 17:55","15 juin 12:30","14 juin 16:10","14 juin 10:25","13 juin 15:35","13 juin 11:00","12 juin 09:40"];
   // ids = chaînes numériques, comme l'API réelle (str(e.id) d'un entier SQLite).
+  // Les entrées « réunion » simulent une session diarisée : texte à étiquettes de
+  // locuteur et registre renommable après coup (FR-31, renommage post-session).
   let history = times.map((t, i) => ({
     id: String(i + 1), time: t, sec: 18 + (i * 23) % 172,
-    words: 38 + (i * 17) % 170, source: sources[i % 3], text: texts[i % texts.length],
+    words: 38 + (i * 17) % 170, source: sources[i % 3],
+    text: sources[i % 3] === "réunion"
+      ? "[00:04] Locuteur 1 : " + texts[i % texts.length] +
+        "\n[00:21] Locuteur 2 : " + texts[(i + 1) % texts.length]
+      : texts[i % texts.length],
+    speakers: sources[i % 3] === "réunion"
+      ? [{ key: "spk:0", auto: "Locuteur 1", name: "" },
+         { key: "spk:1", auto: "Locuteur 2", name: "" }]
+      : [],
   }));
 
   // Dictionnaire factice (aperçu autonome de l'onglet Dictionnaire, UC-19).
@@ -67,6 +77,9 @@ const Mock = (() => {
 
   // État GPU factice : GPU présent mais composants absents → démontre le flux d'install.
   let gpu = { gpu: true, components: false, canInstall: true, install: "idle", message: "" };
+
+  // Bench local factice (préréglages de performance) : ~2 s de « mesure », résultat plausible.
+  let bench = { state: "idle", seconds: null, load: null, message: "" };
 
   // Flux live factice (modes live/conférence) : des segments s'ajoutent au fil de
   // l'eau pour démontrer l'affichage progressif dans la tuile « Dernière transcription ».
@@ -184,6 +197,13 @@ const Mock = (() => {
       }, 3500);
       return { ok: true, state: "running" };
     },
+    run_bench: () => {
+      if (bench.state === "running") return { ok: true };
+      bench = { state: "running", seconds: null, load: null, message: "Mesure en cours (audio témoin local)…" };
+      setTimeout(() => { bench = { state: "done", seconds: 1.42, load: 0.86, message: "" }; }, 2200);
+      return { ok: true };
+    },
+    bench_status: () => ({ ...bench }),
     list_microphones: () => cfg.mics,
     list_audio_outputs: () => [
       { value: null, label: "Sortie par défaut" },
@@ -200,6 +220,17 @@ const Mock = (() => {
     }),
     delete_history: (id) => { history = history.filter(h => h.id !== id); return { ok: true }; },
     clear_history: () => { history = []; return { ok: true }; },
+    // Renommage post-session (FR-31) : rétroactif sur le texte archivé (aperçu autonome).
+    rename_history_speaker: (id, key, name) => {
+      const h = history.find(x => x.id === id);
+      const s = h && (h.speakers || []).find(x => x.key === key);
+      if (!s) return { ok: false, error: "Locuteur inconnu." };
+      const before = s.name || s.auto;
+      s.name = (name || "").trim();
+      const after = s.name || s.auto;
+      h.text = h.text.split("] " + before + " : ").join("] " + after + " : ");
+      return { ok: true, fileUpdated: true };
+    },
     copy_text: (t) => { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} return { ok: true }; },
     win_minimize: () => ({ ok: true }), win_maximize: () => ({ ok: true }), win_close: () => ({ ok: true }),
     win_move: () => ({ ok: true }),
@@ -765,6 +796,37 @@ function updateSourceVisibility() {
 // ───────────────────────────── Configuration ───────────────────────────────
 const MODELS = ["tiny", "base", "small", "medium", "large-v3"];
 
+// Préréglages de performance (Q-07/RSK-02) : combinaisons taille + compute_type
+// prêtes à l'emploi pour qui ne sait pas les composer. Ils REMPLISSENT les champs
+// (ui.cfg), l'application passe par « Enregistrer » (circuit save_config habituel).
+// « Précis » ne force pas le périphérique : float16 seulement si CUDA est déjà choisi.
+const PRESETS = {
+  rapide:    { model: "base",     compute: () => "int8" },
+  equilibre: { model: "medium",   compute: () => "int8" },
+  precis:    { model: "large-v3", compute: () => (ui.cfg.device || "").toUpperCase() === "CUDA" ? "float16" : "int8" },
+};
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  ui.cfg.model = p.model;
+  ui.cfg.compute = p.compute();
+  $$("#model-opts .seg").forEach(x => x.classList.toggle("active", x.dataset.model === p.model));
+  syncPresets();
+}
+
+// Surligne le préréglage qui correspond à la sélection courante (taille + compute,
+// compute attendu recalculé selon le périphérique) ; aucun si combinaison manuelle.
+function syncPresets() {
+  $$("#preset-opts .seg").forEach(b => {
+    const p = PRESETS[b.dataset.preset];
+    b.classList.toggle(
+      "active",
+      !!p && ui.cfg.model === p.model && (ui.cfg.compute || "int8") === p.compute()
+    );
+  });
+}
+
 async function loadConfig() {
   const c = await call("get_config");
   ui.cfg = c;
@@ -776,7 +838,10 @@ async function loadConfig() {
   $$("#model-opts .seg").forEach(b => b.addEventListener("click", () => {
     ui.cfg.model = b.dataset.model;
     $$("#model-opts .seg").forEach(x => x.classList.toggle("active", x === b));
+    syncPresets();  // une taille choisie à la main peut sortir du préréglage
   }));
+  syncPresets();
+  refreshBenchStatus();  // reflète une mesure encore en cours (retour sur l'onglet)
 
   $("#cfg-device").value = c.device;
   $("#cfg-langue").value = c.langue;
@@ -959,6 +1024,57 @@ async function installGpu() {
   refreshGpuStatus();  // bascule en mode « running » + démarre le polling
 }
 
+// ───────────────────────────── Bench local (préréglages) ────────────────────
+// « Tester sur ce poste » : mesure la durée de transcription d'un audio témoin
+// généré localement (zéro réseau), sur la configuration ENREGISTRÉE. Suivi par
+// polling bench_status (même modèle que gpu_status) ; mode exclusif côté Python
+// (machine à états) : une dictée en cours fait refuser le lancement, jamais l'inverse.
+let benchPollTimer = null;
+
+function fmtSeconds(v) {
+  return Number(v).toFixed(2).replace(".", ",") + " s";
+}
+
+async function refreshBenchStatus() {
+  const el = $("#bench-status");
+  const btn = $("#bench-btn");
+  if (!el || !btn) return;
+  if (benchPollTimer) { clearTimeout(benchPollTimer); benchPollTimer = null; }
+  const s = (await call("bench_status")) || {};
+  if (s.state === "running") {
+    btn.disabled = true;
+    el.style.color = "var(--violet-2)";
+    el.textContent = s.message || "Mesure en cours…";
+    benchPollTimer = setTimeout(refreshBenchStatus, 1000);
+    return;
+  }
+  btn.disabled = false;
+  if (s.state === "done") {
+    el.style.color = "var(--green-2)";
+    el.textContent = "Audio témoin transcrit en " + fmtSeconds(s.seconds)
+      + (s.load != null ? " (chargement du modèle : " + fmtSeconds(s.load) + ")" : "")
+      + ".";
+  } else if (s.state === "error") {
+    el.style.color = "var(--red-2)";
+    el.textContent = s.message || "Mesure impossible.";
+  }
+  // state « idle » : on laisse le texte d'aide initial (rien à afficher).
+}
+
+async function runBench() {
+  const el = $("#bench-status");
+  const btn = $("#bench-btn");
+  btn.disabled = true;
+  const res = (await call("run_bench")) || {};
+  if (res.ok === false) {
+    btn.disabled = false;
+    el.style.color = "var(--red-2)";
+    el.textContent = res.error || "Mesure impossible.";
+    return;
+  }
+  refreshBenchStatus();  // bascule en « running » + démarre le polling
+}
+
 // Les champs endpoint/modèle servent au raffinage ET au résumé de session :
 // actifs dès que l'un des deux usages est activé.
 function applyIaState(on) {
@@ -968,8 +1084,11 @@ function applyIaState(on) {
 }
 
 function bindConfig() {
-  $("#cfg-device").addEventListener("change", e => { ui.cfg.device = e.target.value; refreshGpuStatus(); });
+  // Le compute attendu de « Précis » dépend du périphérique : resynchroniser.
+  $("#cfg-device").addEventListener("change", e => { ui.cfg.device = e.target.value; refreshGpuStatus(); syncPresets(); });
   $("#gpu-install-btn").addEventListener("click", installGpu);
+  $$("#preset-opts .seg").forEach(b => b.addEventListener("click", () => applyPreset(b.dataset.preset)));
+  $("#bench-btn").addEventListener("click", runBench);
   $("#cfg-langue").addEventListener("change", e => { ui.cfg.langue = e.target.value; });
   $("#cfg-mic").addEventListener("change", e => { ui.cfg.mic = e.target.value === "" ? null : Number(e.target.value); });
 
@@ -1056,6 +1175,7 @@ function endCapture(combo) {
 async function saveConfig() {
   const payload = {
     model: ui.cfg.model, device: ui.cfg.device, langue: ui.cfg.langue,
+    compute: ui.cfg.compute,
     mic: ui.cfg.mic, vad: ui.cfg.vad, silence: ui.cfg.silence, combo: ui.cfg.combo,
     injection: ui.cfg.injection, delai: ui.cfg.delai,
     ia: ui.cfg.ia, iaEndpoint: ui.cfg.iaEndpoint, iaModel: ui.cfg.iaModel,
@@ -1203,10 +1323,10 @@ function srcLabel(source) {
 }
 function fmtSec(s) { const m = Math.floor(s / 60); return m + ":" + String(s % 60).padStart(2, "0"); }
 
-async function loadHistory() {
+async function loadHistory(keepView = false) {
   const data = await call("get_history");
   ui.hist.all = data.items || [];
-  ui.hist.page = 1;
+  if (!keepView) ui.hist.page = 1;   // keepView : rechargement en place (renommage FR-31)
   renderHistory();
 }
 
@@ -1275,6 +1395,21 @@ function renderHistory() {
     const copyBtn = copied
       ? `<svg width="12" height="12" viewBox="0 0 13 13" fill="none" stroke="#4ade80" stroke-width="1.6"><path d="M2.5 7l3 3 5-6.5"/></svg><span class="copied">Copié</span>`
       : `<svg width="12" height="12" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><path d="M2 8.5V2.5A1 1 0 0 1 3 1.5h6"/></svg>Copier`;
+    // Réunion diarisée archivée : locuteurs renommables après la session (FR-31).
+    // Réutilise le pattern du panneau live (speaker-row/tag/input) ; le texte de
+    // l'entrée et le fichier exporté sont re-rendus côté Python à l'enregistrement.
+    const spk = (it.speakers && it.speakers.length) ? `
+          <div class="speakers hist-speakers">
+            <div class="speakers-head">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="5.5" cy="5" r="2.2"/><path d="M2 12.6c0-2.1 1.7-3.1 3.5-3.1s3.5 1 3.5 3.1"/><circle cx="11.2" cy="5.6" r="1.7"/><path d="M10.2 9.7c1.9 0 3 1 3 2.9"/></svg>
+              <span>Locuteurs (renommage rétroactif)</span>
+            </div>
+            <div class="speakers-list">${it.speakers.map(s =>
+              `<div class="speaker-row"><span class="speaker-tag">${escapeHtml(s.auto)}</span>` +
+              `<input class="speaker-input" type="text" maxlength="60" data-key="${escapeHtml(s.key)}" ` +
+              `value="${escapeHtml(s.name || "")}" placeholder="Renommer (ex. Marie Dupont)…"></div>`
+            ).join("")}</div>
+          </div>` : "";
     return `
       <div class="hist-item ${open ? "open" : ""}" data-id="${it.id}">
         <button class="row" data-act="toggle">
@@ -1285,7 +1420,7 @@ function renderHistory() {
           ${chev}
         </button>
         <div class="hist-detail">
-          <p>${escapeHtml(it.text)}</p>
+          <p>${escapeHtml(it.text)}</p>${spk}
           <div style="display:flex; gap:8px;">
             <button class="btn-ghost" data-act="copy">${copyBtn}</button>
             <button class="btn-danger" data-act="delete"><svg width="12" height="12" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 3.5h8M5 3.5V2.3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.2M3.5 3.5l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9l.5-7"/></svg>Supprimer</button>
@@ -1338,6 +1473,27 @@ function bindHistory() {
   $("#hist-dur").addEventListener("change", e => { ui.hist.words = +e.target.value; ui.hist.page = 1; ui.hist.expanded = null; renderHistory(); });
   $("#hist-prev").addEventListener("click", () => { ui.hist.page = Math.max(1, ui.hist.page - 1); ui.hist.expanded = null; renderHistory(); });
   $("#hist-next").addEventListener("click", () => { ui.hist.page += 1; ui.hist.expanded = null; renderHistory(); });
+  // Renommage post-session des locuteurs (FR-31) : délégué au conteneur (la liste est
+  // re-rendue à chaque changement). Même modèle que le panneau live : change =
+  // validation (blur, ou Entrée qui force le blur) — pas d'appel si valeur inchangée.
+  $("#hist-list").addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.target.classList.contains("speaker-input")) {
+      e.preventDefault(); e.target.blur();
+    }
+  });
+  $("#hist-list").addEventListener("change", e => {
+    if (!e.target.classList.contains("speaker-input")) return;
+    const item = e.target.closest(".hist-item");
+    if (item) saveHistSpeaker(item.dataset.id, e.target.dataset.key, e.target.value);
+  });
+}
+
+async function saveHistSpeaker(entryId, key, name) {
+  if (!entryId || !key) return;
+  const res = await call("rename_history_speaker", entryId, key, (name || "").trim());
+  // Recharge en place (page et entrée dépliée conservées) : le texte re-rendu et les
+  // libellés viennent du backend — pas de mise à jour optimiste côté JS.
+  if (res && res.ok) loadHistory(true);
 }
 
 // ───────────────────────────── Barre de titre / fenêtre ─────────────────────

@@ -353,6 +353,85 @@ def test_history(tmp_path: Path) -> None:
     print("[6] historique SQLite : add/recent/last_text/purge/clear + désactivé  OK")
 
 
+def test_history_migration(tmp_path: Path) -> None:
+    """FR-31 : migration versionnée (PRAGMA user_version) d'une base ancienne."""
+    import sqlite3
+
+    from whisperty.history import History
+
+    base = tmp_path or Path(__file__).resolve().parent
+    db = base / "hist_old.db"
+    if db.exists():
+        db.unlink()
+    # Base au schéma d'ORIGINE (sans colonne payload ni user_version) : celle d'une
+    # installation antérieure à la migration v1.
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE transcriptions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, "
+        "text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'dictée', app TEXT, model TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO transcriptions (timestamp, text) VALUES "
+        "('2026-01-01T10:00:00', 'ancienne dictée')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Ouverture avec l'app à jour : la base s'ouvre sans erreur, entrées intactes.
+    h = History(db, max_entries=50, enabled=True)
+    rec = h.recent(10)
+    assert len(rec) == 1 and rec[0].text == "ancienne dictée"
+    assert rec[0].payload is None                      # colonne ajoutée, vide
+    # Round-trip payload après migration + lecture unitaire get().
+    h.add("réunion migrée", source="réunion", payload={"version": 1, "speakers": []})
+    entry = h.recent(1)[0]
+    assert entry.payload == {"version": 1, "speakers": []}
+    assert h.get(entry.id).text == "réunion migrée"
+    assert h.get(999999) is None and h.get("abc") is None
+    h.close()
+
+    # Schéma estampillé v1 (la migration sera un no-op au prochain démarrage).
+    conn = sqlite3.connect(str(db))
+    assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 1
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(transcriptions)")}
+    conn.close()
+    assert "payload" in cols
+    db.unlink()
+    print("[6b] historique : migration v1 (user_version + payload) d'une base ancienne  OK")
+
+
+def test_history_update_text_fts(tmp_path: Path) -> None:
+    """FR-31 : update_text réécrit texte+payload et l'index FTS suit (trigger UPDATE)."""
+    from whisperty.history import History
+
+    base = tmp_path or Path(__file__).resolve().parent
+    db = base / "hist_upd.db"
+    if db.exists():
+        db.unlink()
+    h = History(db, max_entries=50, enabled=True)
+    h.add("[00:04] Locuteur 2 : bonjour à tous", source="réunion", payload={"v": 1})
+    entry = h.recent(1)[0]
+
+    assert h.update_text(entry.id, "[00:04] Marie : bonjour à tous", payload={"v": 2}) is True
+    got = h.get(entry.id)
+    assert got.text == "[00:04] Marie : bonjour à tous" and got.payload == {"v": 2}
+    # Recherche plein texte à jour : le nouveau nom se retrouve, l'ancien libellé non.
+    if h._fts_ok:
+        assert [e.id for e in h.search("Marie")] == [entry.id]
+        assert h.search("Locuteur") == []
+    # payload=None laisse la colonne inchangée.
+    assert h.update_text(entry.id, "texte seul") is True
+    assert h.get(entry.id).payload == {"v": 2}
+    # Never-fail : id inconnu/invalide ou texte vide → False, sans lever.
+    assert h.update_text(999999, "x") is False
+    assert h.update_text("abc", "x") is False
+    assert h.update_text(entry.id, "") is False
+    h.close()
+    db.unlink()
+    print("[6c] historique : update_text (texte + payload) + index FTS synchronisé  OK")
+
+
 # =============================================================================
 # 7) Profils de contexte (V2)
 # =============================================================================
@@ -1451,6 +1530,247 @@ def test_conference_diarization(tmp_path: Path) -> None:
     print("[27] diarisation réunion : clés locuteur, numérotation, renommage rétroactif, export, repli  OK")
 
 
+def test_conference_payload(tmp_path: Path) -> None:
+    """FR-31 : structure de session archivée — rendu pur, réécriture du fichier, _finish."""
+    import json
+    import queue
+    import time
+
+    import numpy as np
+
+    from whisperty.conference import (
+        ConferenceTranscriber,
+        render_payload_lines,
+        render_payload_transcript,
+        rewrite_payload_transcript,
+    )
+    from whisperty.config import Config
+    from whisperty.diarization import Diarizer
+
+    base = tmp_path or Path(__file__).resolve().parent
+
+    # (a) Rendu pur : tri chronologique, libellés résolus AU RENDU (renommage rétroactif),
+    #     clés hors registre (source, Note) affichées telles quelles.
+    payload = {
+        "type": "réunion", "version": 1,
+        "segments": [[21.0, "spk:1", "salut"], [4.0, "spk:0", "bonjour"],
+                     [10.0, "Note", "penser au CR"], [30.0, "Interlocuteurs", "repli"]],
+        "speakers": [{"key": "spk:0", "auto": "Locuteur 1", "name": ""},
+                     {"key": "spk:1", "auto": "Locuteur 2", "name": "Marie"}],
+        "notes": [[10.0, "penser au CR"]],
+        "path": None, "format": "md",
+        "header": "# Transcription de réunion\n\n- Date : 2026-08-13T10:00:00\n\n",
+    }
+    lines = render_payload_lines(payload)
+    assert lines == [
+        "[00:04] Locuteur 1 : bonjour",
+        "[00:10] Note : penser au CR",
+        "[00:21] Marie : salut",
+        "[00:30] Interlocuteurs : repli",
+    ], lines
+    # Payload = donnée stockée : lignes malformées ignorées, jamais d'exception.
+    bad = dict(payload, segments=payload["segments"] + [["x"], None, [1.0]])
+    assert render_payload_lines(bad) == lines
+    content = render_payload_transcript(payload)
+    assert content.startswith(payload["header"])
+    assert "[00:21] Marie : salut" in content
+    assert "\n## Notes\n" in content and "[00:10] penser au CR" in content
+
+    # (b) Réécriture atomique du fichier exporté, section « Résumé » (UC-17) préservée.
+    f = base / "reunion_payload.md"
+    f.write_text(content + "\n## Résumé\n\nPoints clés.\n", encoding="utf-8")
+    p2 = dict(payload, path=str(f))
+    p2["speakers"] = [{"key": "spk:0", "auto": "Locuteur 1", "name": "Ana"}] + p2["speakers"][1:]
+    ok, detail = rewrite_payload_transcript(p2)
+    assert ok is True and detail == ""
+    out = f.read_text(encoding="utf-8")
+    assert "[00:04] Ana : bonjour" in out and "Locuteur 1 :" not in out
+    assert out.endswith("\n## Résumé\n\nPoints clés.\n")
+
+    # (c) Dégradation propre : jamais exporté / fichier disparu → (False, raison), sans lever.
+    assert rewrite_payload_transcript(dict(payload, path=None))[0] is False
+    f.unlink()
+    ok, detail = rewrite_payload_transcript(p2)
+    assert ok is False and "introuvable" in detail
+
+    # (d) _finish publie la structure (réunion diarisée), JSON-compatible, chemin/format inclus.
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.conference.export_dir = "conf_payload"
+    cfg.conference.distinguish_speakers = True
+    cfg.conference.speaker_diarization.enabled = True
+    cfg.conference.speaker_diarization.min_segment = 0.0
+
+    class FakeTr:
+        def transcribe_segments(self, audio, profile=None):
+            return [(0.0, 1.0, "phrase")]
+
+    def fake_embed(audio, sr):
+        return np.array([1.0, 0.0], np.float32)
+
+    results: list = []
+    ct = ConferenceTranscriber(cfg, FakeTr(), on_finished=results.append)
+    ct._distinct = True
+    ct._diar = Diarizer(cfg.conference.speaker_diarization, 16000, embed_fn=fake_embed)
+    ct._diar_queue = queue.Queue()
+    ct._t0 = time.monotonic()
+    ct._emit_distinct("mic", 8000, np.full(8000, 0.4, np.float32))
+    ct._diar_queue.put(None)
+    ct._diar_loop(ct._diar_queue, ct._diar, ct._session_gen)
+    path = ct._open_transcript("Sys", "Mic")
+    ct._close_transcript()
+    ct._finish("Sys", path)
+    got = results[0]["payload"]
+    assert got is not None and got["version"] == 1
+    assert got["segments"] == [[0.0, "spk:0", "phrase"]]
+    assert got["speakers"] == [{"key": "spk:0", "auto": "Locuteur 1", "name": ""}]
+    assert got["path"] == str(path) and got["format"] == ct._fmt
+    assert got["header"].startswith("#")               # en-tête d'ORIGINE (réécritures datées)
+    json.dumps(got)                                     # archivable tel quel (colonne JSON)
+    path.unlink()
+
+    # (e) Sans diarisation (distinction par source seule) : pas de structure publiée.
+    results.clear()
+    ct2 = ConferenceTranscriber(cfg, FakeTr(), on_finished=results.append)
+    ct2._distinct = True
+    ct2._segments = [(0.0, "Moi", "x")]
+    ct2._finish(None, None)
+    assert results[0]["payload"] is None
+    print("[28] structure de session réunion : rendu pur, réécriture (résumé préservé), _finish  OK")
+
+
+def test_rename_history_speaker_e2e(tmp_path: Path) -> None:
+    """FR-31 : renommage post-session via WhispertyApp (= ce que GuiApi appelle)."""
+    _install_gui_stubs()
+    _install_injection_stubs()
+    from whisperty.app import WhispertyApp
+    from whisperty.conference import render_payload_transcript
+    from whisperty.config import Config
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.history.path = "hist_rename.db"      # isole de la base du dépôt
+    cfg.dictionary.enabled = False
+    app = WhispertyApp(cfg)
+    try:
+        # Session archivée : fichier exporté + résumé (UC-17) ajouté APRÈS l'archivage.
+        f = base / "reunion_rename.md"
+        payload = {
+            "type": "réunion", "version": 1,
+            "segments": [[4.0, "spk:0", "bonjour"], [21.0, "spk:1", "salut"]],
+            "speakers": [{"key": "spk:0", "auto": "Locuteur 1", "name": ""},
+                         {"key": "spk:1", "auto": "Locuteur 2", "name": ""}],
+            "notes": [],
+            "path": str(f), "format": "md",
+            "header": "# Transcription de réunion\n\n- Date : 2026-08-13T09:00:00\n\n",
+        }
+        f.write_text(
+            render_payload_transcript(payload) + "\n## Résumé\n\nPoints clés.\n",
+            encoding="utf-8",
+        )
+        app.history.add(
+            "[00:04] Locuteur 1 : bonjour\n[00:21] Locuteur 2 : salut",
+            source="réunion", payload=payload,
+        )
+        entry_id = app.history.recent(1)[0].id
+
+        # Renommage : entrée re-rendue (base + FTS), fichier réécrit, résumé préservé.
+        res = app.rename_history_speaker(entry_id, "spk:1", "Marie")
+        assert res["ok"] is True and res["fileUpdated"] is True
+        got = app.history.get(entry_id)
+        assert "[00:21] Marie : salut" in got.text and "Locuteur 2" not in got.text
+        assert got.payload["speakers"][1]["name"] == "Marie"
+        if app.history._fts_ok:
+            assert any(e.id == entry_id for e in app.history.search("Marie"))
+        out = f.read_text(encoding="utf-8")
+        assert "[00:21] Marie : salut" in out
+        assert out.endswith("\n## Résumé\n\nPoints clés.\n")
+
+        # Identifiants en chaînes (pont GUI) : acceptés.
+        assert app.rename_history_speaker(str(entry_id), "spk:0", "Ana")["ok"] is True
+        assert "[00:04] Ana : bonjour" in app.history.get(entry_id).text
+
+        # Dégradation : fichier déplacé/supprimé → historique mis à jour + notification.
+        f.unlink()
+        rev0 = app.notice_rev()
+        res = app.rename_history_speaker(entry_id, "spk:1", "Paul")
+        assert res["ok"] is True and res["fileUpdated"] is False
+        assert "[00:21] Paul : salut" in app.history.get(entry_id).text
+        assert app.notice_rev() > rev0
+        assert "fichier" in app.notice().get("text", "").lower()
+
+        # Erreurs franches : entrée inconnue, entrée sans structure, locuteur inconnu.
+        assert app.rename_history_speaker(999999, "spk:0", "X")["ok"] is False
+        app.history.add("simple dictée")
+        did = app.history.recent(1)[0].id
+        assert app.rename_history_speaker(did, "spk:0", "X")["ok"] is False
+        assert app.rename_history_speaker(entry_id, "spk:9", "X")["ok"] is False
+    finally:
+        app.quit()
+    print("[29] renommage post-session (FR-31) — E2E WhispertyApp : base, FTS, fichier, dégradation  OK")
+
+
+def test_rename_history_speaker_concurrent(tmp_path: Path) -> None:
+    """FR-31 : renommages simultanés (un thread pywebview par appel du pont) sans perte.
+
+    Sans la sérialisation par ``_archive_lock``, deux threads liraient la même version
+    du payload et le dernier écrirait sa vue PÉRIMÉE de l'autre locuteur (mise à jour
+    perdue). Le test martèle les deux locuteurs en parallèle : l'état final doit
+    contenir LES DEUX renommages, dans le payload comme dans le texte re-rendu.
+    """
+    import threading as _threading
+
+    _install_gui_stubs()
+    _install_injection_stubs()
+    from whisperty.app import WhispertyApp
+    from whisperty.config import Config
+
+    base = tmp_path or Path(__file__).resolve().parent
+    cfg = Config()
+    cfg.base_dir = base
+    cfg.history.path = "hist_conc.db"        # isole de la base du dépôt
+    cfg.dictionary.enabled = False
+    app = WhispertyApp(cfg)
+    try:
+        payload = {
+            "type": "réunion", "version": 1,
+            "segments": [[4.0, "spk:0", "bonjour"], [21.0, "spk:1", "salut"]],
+            "speakers": [{"key": "spk:0", "auto": "Locuteur 1", "name": ""},
+                         {"key": "spk:1", "auto": "Locuteur 2", "name": ""}],
+            "notes": [], "path": None, "format": "md", "header": "# Réunion\n\n",
+        }
+        app.history.add("x", source="réunion", payload=payload)
+        entry_id = app.history.recent(1)[0].id
+
+        barrier = _threading.Barrier(2)
+        failures: list = []
+
+        def worker(key: str, name: str) -> None:
+            barrier.wait()  # départ simultané (maximise l'entrelacement)
+            for _ in range(25):
+                res = app.rename_history_speaker(entry_id, key, name)
+                if not res.get("ok"):
+                    failures.append(res)
+
+        t1 = _threading.Thread(target=worker, args=("spk:0", "Ana"))
+        t2 = _threading.Thread(target=worker, args=("spk:1", "Marie"))
+        t1.start()
+        t2.start()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+        assert not t1.is_alive() and not t2.is_alive()
+        assert not failures, failures
+
+        got = app.history.get(entry_id)
+        names = {s["key"]: s["name"] for s in got.payload["speakers"]}
+        assert names == {"spk:0": "Ana", "spk:1": "Marie"}, names
+        assert "[00:04] Ana : bonjour" in got.text and "[00:21] Marie : salut" in got.text
+    finally:
+        app.quit()
+    print("[30] renommage post-session concurrent : RMW sérialisé (_archive_lock), zéro perte  OK")
+
+
 # =============================================================================
 # 22) Résumé de fin de session (UC-17) — LLM local
 # =============================================================================
@@ -1808,6 +2128,8 @@ def _run_all() -> None:
     test_key_variants_and_imports()
     test_state_machine()
     test_history(tmp)
+    test_history_migration(tmp)
+    test_history_update_text_fts(tmp)
     test_profiles()
     test_ai_local_guard()
     test_transcriber_overrides(tmp)
@@ -1824,6 +2146,9 @@ def _run_all() -> None:
     test_conference_distinct(tmp)
     test_diarization_logic()
     test_conference_diarization(tmp)
+    test_conference_payload(tmp)
+    test_rename_history_speaker_e2e(tmp)
+    test_rename_history_speaker_concurrent(tmp)
     test_session_notes(tmp)
     test_session_summary()
     test_dictionary_edit(tmp)

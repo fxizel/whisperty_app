@@ -481,6 +481,9 @@ input[type=text] {
 .hist-detail { padding: 0 15px 15px 62px; }
 .accordion:not(.open) .hist-detail, .hist-item:not(.open) .hist-detail { display: none; }
 .hist-detail p { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--text-3); }
+/* Locuteurs d'une réunion archivée (FR-31) : reprend le panneau live (.speakers),
+   ajusté au détail d'une entrée (pas de marge haute héritée de la tuile). */
+.hist-detail .hist-speakers { margin: 0 0 12px; }
 .hist-empty { padding: 40px; text-align: center; color: var(--dim); font-size: 13px; }
 
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px; padding-top: 4px; }

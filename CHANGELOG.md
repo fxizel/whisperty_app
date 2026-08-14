@@ -8,6 +8,21 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 
 ### Ajouté
 
+- **Préréglages de performance** (écran Configuration) : trois boutons — « Rapide »
+  (base + int8), « Équilibré » (medium + int8), « Précis » (large-v3, float16 si CUDA
+  est sélectionné) — remplissent les champs existants ; l'application passe par
+  « Enregistrer » comme toute modification manuelle. Bouton « **Tester sur ce poste** » :
+  mesure la durée de transcription d'un audio témoin **généré localement** (pur NumPy,
+  déterministe — rien à télécharger, zéro réseau) sur la configuration enregistrée,
+  en mode exclusif (ne peut jamais interrompre ni concurrencer une dictée).
+- **Renommage des locuteurs après la session** (FR-31 complet) : dans l'écran
+  Historique, le détail d'une réunion diarisée liste les locuteurs détectés avec des
+  champs de renommage ; renommer « Locuteur 2 » en « Marie » réécrit le texte archivé
+  (recherche plein texte comprise) et le fichier `.txt`/`.md` exporté s'il existe
+  encore (résumé de fin de session préservé) — fichier déplacé ou supprimé =
+  dégradation propre, l'historique reste mis à jour et l'utilisateur est notifié.
+  La base d'historique est désormais **versionnée** (`PRAGMA user_version`, migrations
+  incrémentales) : les bases existantes sont migrées sans perte à l'ouverture.
 - **Commandes de ponctuation dictées** (`punctuation.enabled`, opt-in) : « point »,
   « virgule », « deux points », « point d'interrogation », « à la ligne », « nouveau
   paragraphe », « ouvrez/fermez la parenthèse », « ouvrez/fermez les guillemets »… sont

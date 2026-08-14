@@ -116,6 +116,24 @@ class WhispertyApp:
         self._notice_text = ""
         self._notice_kind = "info"
         self._model_error: str | None = None
+        # V2 : sérialise les read-modify-write sur une SESSION ARCHIVÉE (entrée
+        # d'historique + fichier transcript exporté) — renommage post-session (FR-31,
+        # get → re-rendu → update_text → réécriture du fichier) et ajout du résumé au
+        # fichier (UC-17). Sans lui, deux renommages rapprochés (un thread pywebview
+        # par appel du pont) se liraient la même version du payload et le second
+        # écraserait le premier ; et la réécriture pourrait effacer un résumé ajouté
+        # entre sa lecture du fichier et son os.replace. Ordre : _archive_lock →
+        # History._lock (feuille), JAMAIS l'inverse ; jamais imbriqué avec _lock ni
+        # tenu autour de l'appel LLM ; _notify_user est appelé hors de ce verrou.
+        self._archive_lock = threading.Lock()
+        # V2 : bench local de transcription (préréglages de performance, écran
+        # Configuration). État publié sous _bench_lock (verrou FEUILLE, même modèle
+        # que _notice_lock : jamais imbriqué) et relevé par GuiApi.bench_status
+        # (polling pendant la mesure, comme gpu_status/model_status).
+        self._bench_lock = threading.Lock()
+        self._bench: dict[str, object] = {
+            "state": "idle", "seconds": None, "load": None, "message": "",
+        }
         # V2 : transcription live d'une sortie audio (loopback).
         self.live = LiveTranscriber(
             config,
@@ -432,6 +450,80 @@ class WhispertyApp:
             logger.exception("Sélecteur de fichier indisponible")
             return None
 
+    # -- bench local (préréglages de performance, écran Configuration) ---------
+    def _set_bench(self, state: str, seconds=None, load=None, message: str = "") -> None:
+        """Publie l'état du bench (sous ``_bench_lock``, verrou feuille)."""
+        with self._bench_lock:
+            self._bench = {
+                "state": state, "seconds": seconds, "load": load, "message": message,
+            }
+
+    def bench_status(self) -> dict:
+        """État du bench pour l'interface : {state: idle|running|done|error, seconds,
+        load, message}. Relevé par polling pendant la mesure (cf. gpu_status)."""
+        with self._bench_lock:
+            return dict(self._bench)
+
+    def start_bench(self) -> dict:
+        """Lance le bench local (« Tester sur ce poste ») : transcrit un audio témoin
+        GÉNÉRÉ localement (zéro réseau) et mesure la durée.
+
+        Mode exclusif via la machine à états (IDLE → PROCESSING → IDLE, comme l'import
+        audio) : le bench ne peut ni interrompre ni concurrencer une dictée. Il mesure
+        la configuration ENREGISTRÉE (le modèle réellement chargé), pas les champs non
+        sauvegardés de l'écran. Non bloquant : la mesure tourne dans un worker, l'UI
+        suit par polling ``bench_status``.
+        """
+        with self._lock:
+            if self._quitting:
+                return {"ok": False, "error": "Fermeture en cours."}
+            busy = self._state is not TrayState.IDLE
+            if not busy:
+                self._set_state(TrayState.PROCESSING)
+        if busy:
+            logger.info("Bench ignoré : une dictée/transcription est en cours.")
+            return {"ok": False, "error": "Impossible : une dictée ou transcription est en cours."}
+        self._set_bench("running", message="Mesure en cours (audio témoin local)…")
+        if not self._spawn_worker(self._run_bench):  # IDLE déjà restauré par _spawn_worker
+            self._set_bench("error", message="Mesure impossible (thread indisponible).")
+            return {"ok": False, "error": "Mesure impossible (thread indisponible)."}
+        return {"ok": True}
+
+    def _run_bench(self) -> None:
+        """Worker du bench : charge le modèle (mesuré à part), transcrit l'audio témoin."""
+        try:
+            # Import DANS le try : si quoi que ce soit lève ici, le finally repasse
+            # IDLE au lieu de laisser l'app figée en PROCESSING (motif _process_file).
+            from .transcriber import BENCH_SAMPLE_RATE, bench_audio
+
+            audio = bench_audio()
+            t0 = time.perf_counter()
+            self.transcriber.load()          # 1er chargement mesuré à part (cache ensuite)
+            load_s = time.perf_counter() - t0
+            t1 = time.perf_counter()
+            self.transcriber.transcribe_bench(audio)
+            seconds = time.perf_counter() - t1
+            self._set_model_error(None)
+            self._set_bench(
+                "done", seconds=round(seconds, 2),
+                load=round(load_s, 2) if load_s >= 0.05 else None,
+            )
+            logger.info(
+                "Bench local : %.2f s de transcription pour %.1f s d'audio témoin "
+                "(chargement %.2f s).", seconds, audio.shape[0] / BENCH_SAMPLE_RATE, load_s,
+            )
+        except ModelNotAvailableError as exc:
+            logger.error("%s", exc)
+            self._set_model_error(exc)
+            self._set_bench("error", message=self._model_unavailable_message())
+        except Exception:  # noqa: BLE001
+            logger.exception("Bench local échoué")
+            self._set_bench("error", message="Mesure impossible — détails dans logs/whisperty.log.")
+        finally:
+            with self._lock:
+                if self._state is TrayState.PROCESSING:
+                    self._set_state(TrayState.IDLE)
+
     # -- flux live « au fil de l'eau » (live / réunion) ------------------------
     def _reset_live_transcript(self) -> None:
         """Vide le flux affiché et invalide le cache JS (le compteur change → re-fetch)."""
@@ -640,8 +732,13 @@ class WhispertyApp:
             try:
                 p = Path(str(path))
                 heading = "\n## Résumé\n\n" if p.suffix.lower() == ".md" else "\n# Résumé\n"
-                with p.open("a", encoding="utf-8") as fh:
-                    fh.write(heading + summary.strip() + "\n")
+                # Sous _archive_lock (E/S fichier SEULEMENT — l'appel LLM ci-dessus est
+                # resté hors verrou) : un renommage post-session concurrent (FR-31)
+                # réécrit ce même fichier ; sans sérialisation, sa réécriture pourrait
+                # lire le fichier AVANT cet ajout et le remplacer APRÈS → résumé perdu.
+                with self._archive_lock:
+                    with p.open("a", encoding="utf-8") as fh:
+                        fh.write(heading + summary.strip() + "\n")
             except OSError:
                 logger.warning("Ajout du résumé au transcript échoué.", exc_info=True)
         try:
@@ -828,8 +925,11 @@ class WhispertyApp:
         # try/finally : le retour IDLE est GARANTI même si l'archivage échoue.
         try:
             if not error and text:
+                # payload (FR-31) : structure de session d'une réunion diarisée —
+                # permet le renommage des locuteurs APRÈS la session (None sinon).
                 self.history.add(
-                    text, source="réunion", app=device, model=self.config.transcription.model
+                    text, source="réunion", app=device, model=self.config.transcription.model,
+                    payload=result.get("payload"),
                 )
         except Exception:  # noqa: BLE001 — la session est terminée, rien ne doit bloquer
             logger.exception("Archivage de la réunion échoué")
@@ -898,6 +998,58 @@ class WhispertyApp:
                 ]
                 self._live_rev += 1
         return {"ok": True}
+
+    def rename_history_speaker(
+        self, entry_id: object = None, key: object = None, name: object = None,
+    ) -> dict:
+        """Renomme un locuteur d'une réunion ARCHIVÉE (FR-31, renommage post-session).
+
+        Même rétroactivité qu'en session, appliquée à froid : le texte de l'entrée est
+        re-rendu depuis les clés stockées (``payload``), la base est mise à jour (l'index
+        FTS suit via le trigger UPDATE), puis le fichier exporté est réécrit s'il existe
+        encore. Fichier déplacé/supprimé = dégradation propre : l'historique reste mis à
+        jour et l'utilisateur est notifié (``_notify_user``). Aucun verrou de la machine
+        à états : tout passe par ``History`` (verrou propre) et le système de fichiers.
+        """
+        from .conference import render_payload_lines, rewrite_payload_transcript
+
+        # TOUTE la séquence get → mutation → update_text → réécriture fichier est
+        # sérialisée par _archive_lock : chaque appel du pont GUI arrive sur SON thread
+        # pywebview, et deux renommages rapprochés (blur puis blur) liraient sinon la
+        # même version du payload — le second écraserait le premier (perte silencieuse),
+        # avec en prime un fichier .tmp partagé. Verrou dédié (cf. __init__) : ordre
+        # _archive_lock → History._lock, jamais _lock, notification hors verrou.
+        with self._archive_lock:
+            entry = self.history.get(entry_id)  # never-fail : None si absent/invalide
+            payload = entry.payload if entry is not None else None
+            if not payload or not isinstance(payload.get("speakers"), list):
+                return {"ok": False, "error": "Entrée sans structure de session (renommage impossible)."}
+            clean = " ".join(str(name or "").split())
+            target = str(key or "")
+            hit = False
+            for spk in payload["speakers"]:
+                if isinstance(spk, dict) and spk.get("key") == target:
+                    spk["name"] = clean  # nom vide = retour à l'étiquette auto (comme en session)
+                    hit = True
+            if not hit:
+                return {"ok": False, "error": "Locuteur inconnu."}
+            try:
+                text = "\n".join(render_payload_lines(payload)).strip()
+            except Exception:  # noqa: BLE001 — payload = donnée stockée, prudence
+                logger.exception("Re-rendu d'une réunion archivée échoué")
+                return {"ok": False, "error": "Re-rendu impossible (voir logs)."}
+            if not text or not self.history.update_text(entry.id, text, payload=payload):
+                return {"ok": False, "error": "Mise à jour de l'historique échouée."}
+            file_ok, detail = rewrite_payload_transcript(payload)
+        if not file_ok and payload.get("path"):
+            # Le renommage a bien eu lieu (historique), seul le fichier n'a pas suivi :
+            # comportement perçu → notification, pas seulement les logs.
+            self._notify_user(
+                f"Locuteur renommé dans l'historique, mais fichier exporté non mis à jour "
+                f"({detail}).",
+                "warn",
+            )
+        return {"ok": True, "fileUpdated": bool(file_ok)}
 
     # -- historique (V2) -------------------------------------------------------
     def copy_last(self) -> None:
@@ -1089,6 +1241,17 @@ class WhispertyApp:
                 if dev != c.transcription.device:
                     c.transcription.device = dev
                     updates["transcription.device"] = dev
+                    reload_model = True
+            # compute_type : envoyé par les préréglages de performance (l'écran n'a pas
+            # de champ dédié — « Précis » passe en float16 quand CUDA est actif). Liste
+            # blanche : l'UI est cliente, une valeur inconnue est ignorée.
+            if "compute" in payload:
+                comp = str(payload["compute"] or "").strip().lower()
+                if comp in ("int8", "float16", "int8_float16") and (
+                    comp != c.transcription.compute_type
+                ):
+                    c.transcription.compute_type = comp
+                    updates["transcription.compute_type"] = comp
                     reload_model = True
             if "localOnly" in payload:
                 lo = bool(payload["localOnly"])

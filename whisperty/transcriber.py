@@ -419,6 +419,23 @@ class Transcriber:
             return []
         return self._run_segments(audio, profile)
 
+    def transcribe_bench(self, audio: np.ndarray) -> str:
+        """Transcription pour le **bench local** (préréglages de performance) : comme
+        :meth:`transcribe` mais **sans filtre VAD** — l'audio témoin est synthétique
+        (généré localement, cf. :func:`bench_audio`) et le VAD Silero l'écarterait,
+        ce qui fausserait la mesure (durée ~0 s). Paramètres de l'instance (langue,
+        beam), sans post-traitement (on mesure l'ASR, pas le dictionnaire)."""
+        model = self._ensure_model()
+        segments, _info = model.transcribe(
+            audio,
+            language=self.cfg.language,
+            beam_size=self.cfg.beam_size,
+            initial_prompt=self.cfg.initial_prompt,
+            hotwords=None,
+            vad_filter=False,
+        )
+        return "".join(segment.text for segment in segments).strip()
+
     def _resolve_params(self, profile: Optional["ResolvedProfile"]):
         """Paramètres effectifs : profil de contexte si fourni, sinon défauts de l'instance."""
         if profile is not None:
@@ -498,3 +515,45 @@ class Transcriber:
             if text:
                 out.append((float(segment.start), float(segment.end), text))
         return out
+
+
+# Taux d'échantillonnage attendu par Whisper (et donc par l'audio témoin du bench).
+BENCH_SAMPLE_RATE = 16_000
+
+
+def bench_audio(duration_s: float = 4.0, sample_rate: int = BENCH_SAMPLE_RATE) -> np.ndarray:
+    """Audio témoin du bench local : signal « pseudo-parole » généré en pur NumPy.
+
+    Contrainte cardinale respectée : rien à télécharger ni à embarquer — l'audio est
+    **généré localement et déterministe** (graine fixe), donc les mesures sont
+    comparables d'un préréglage à l'autre. Le signal imite grossièrement la parole
+    (bourdon harmonique à hauteur glissante + formant bruité, enveloppe syllabique
+    ~4 Hz, pauses) pour que l'encodeur travaille comme sur de la vraie voix ; le texte
+    décodé n'a aucune importance, seule la durée compte (cf. ``transcribe_bench``,
+    qui coupe le VAD pour que la mesure ne dépende pas de ce que Silero en pense).
+    """
+    sr = int(sample_rate)
+    n = int(max(0.5, float(duration_s)) * sr)
+    t = np.arange(n, dtype=np.float32) / sr
+    rng = np.random.default_rng(20260814)  # déterministe : mesures reproductibles
+
+    # Hauteur glissante (~120→180 Hz) + 4 premières harmoniques (timbre voisé).
+    f0 = 120.0 + 60.0 * (0.5 + 0.5 * np.sin(2 * np.pi * 0.35 * t))
+    phase = 2 * np.pi * np.cumsum(f0) / sr
+    voiced = sum(
+        (0.6 / (k * k)) * np.sin(k * phase) for k in range(1, 5)
+    ).astype(np.float32)
+    # « Formant » : bruit filtré grossièrement (moyenne glissante) autour des médiums.
+    noise = rng.standard_normal(n).astype(np.float32)
+    kernel = np.hamming(9).astype(np.float32)
+    noise = np.convolve(noise, kernel / kernel.sum(), mode="same")
+    signal = voiced + 0.25 * noise
+    # Enveloppe syllabique (~4 Hz) + pauses inter-« mots » (~0,9 Hz) : rythme de parole.
+    envelope = (0.55 + 0.45 * np.sin(2 * np.pi * 4.0 * t)) * (
+        np.sin(2 * np.pi * 0.9 * t) > -0.6
+    ).astype(np.float32)
+    signal = signal * envelope
+    peak = float(np.max(np.abs(signal)))
+    if peak > 0:
+        signal = signal * (0.3 / peak)  # ~-10 dBFS : niveau de voix confortable
+    return signal.astype(np.float32)
