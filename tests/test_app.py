@@ -545,7 +545,9 @@ class FakeConference:
 def _make_conference_app(tmp: Path):
     """App en session RÉUNION (état CONFERENCE) avec un transcriber doublure.
 
-    L'état importe : `rename_speaker` et `add_note` le vérifient avant d'agir.
+    Reproduit ce que fait `start_conference` : l'état, que `rename_speaker` et `add_note`
+    vérifient avant d'agir, ET la PROPRIÉTÉ de la tuile, que vérifie toute écriture du
+    mode réunion.
     """
     from whisperty.tray import TrayState
 
@@ -553,6 +555,7 @@ def _make_conference_app(tmp: Path):
     conf = FakeConference()
     app.conference = conf
     app._state = TrayState.CONFERENCE
+    app._reset_live_transcript(TrayState.CONFERENCE)
     return app, conf
 
 
@@ -776,6 +779,37 @@ def test_rename_speaker_requires_session(tmp_path: Path) -> None:
     print("[app 25] renommage hors session : refusé, flux intact  OK")
 
 
+def test_conference_writes_rejected_during_live(tmp_path: Path) -> None:
+    """Un producteur de la réunion précédente n'écrit pas dans le flux d'un live.
+
+    La garde d'état de `rename_speaker` est un contrôle-puis-agit : la session peut se
+    terminer et un live démarrer pendant que le thread du pont avance. Comme la réémission
+    reprend un instantané frais à chaque tentative, les trois termes de la CAS
+    redeviendraient cohérents et la réunion PRÉCÉDENTE s'afficherait par-dessus le live —
+    que rien ne réparerait (le mode live n'a pas d'auto-réparation). D'où la propriété de
+    la tuile, posée au démarrage de chaque session.
+    """
+    from whisperty.app import _LIVE_REEMIT_ATTEMPTS
+    from whisperty.tray import TrayState
+
+    app, conf = _make_conference_app(tmp_path)
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+
+    # Fin de réunion puis démarrage d'un live : la tuile change de propriétaire.
+    app._state = TrayState.LIVE
+    app._reset_live_transcript(TrayState.LIVE)
+    app._on_live_segment("10:20:30", "premier segment du live")
+
+    # Réémission tardive du mode réunion (renommage en vol, worker de diarisation
+    # orphelin) : refusée, le flux du live est intact.
+    assert app._reemit_conference_lines(attempts=_LIVE_REEMIT_ATTEMPTS) is False
+    app._arm_live_repair()
+    app._on_conference_segment("[00:04] Locuteur 1 : retardataire", "retardataire")
+    assert app.live_transcript()["text"] == "premier segment du live"
+    print("[app 26] écritures réunion refusées pendant un live : flux préservé  OK")
+
+
 # =============================================================================
 # 14) Journaux : aucune métadonnée personnelle au niveau expédié
 # =============================================================================
@@ -819,7 +853,7 @@ def test_import_logs_without_metadata(tmp_path: Path) -> None:
         shipped = " | ".join(logs.messages(logging.INFO))
         assert "consultation.wav" not in shipped and "Dupont" not in shipped
         assert "ValueError" in shipped
-    print("[app 26] journaux : ni nom ni chemin du fichier importé au niveau expédié  OK")
+    print("[app 27] journaux : ni nom ni chemin du fichier importé au niveau expédié  OK")
 
 
 def _run_all() -> None:
@@ -850,6 +884,7 @@ def _run_all() -> None:
     test_publish_rejects_stale_source(tmp)
     test_append_skipped_after_full_render(tmp)
     test_rename_speaker_requires_session(tmp)
+    test_conference_writes_rejected_during_live(tmp)
     test_import_logs_without_metadata(tmp)
     print("\nTOUS LES TESTS APP PASSENT")
 

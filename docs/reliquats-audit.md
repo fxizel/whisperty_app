@@ -24,4 +24,21 @@ toute modification des fichiers qu'elles couvrent.
   en direct » reste cohérente quand on renomme un locuteur alors que les segments
   continuent d'arriver (auto-réparation au segment suivant, cf. `_on_conference_segment`).
 
+## Connus, non corrigés (relevés par les relectures, hors périmètre de l'audit)
+
+- **`_session_gen` : contrôle-puis-agit** (`conference.py`, `_store_and_write`). Le
+  jeton de génération est comparé HORS `_note_lock`, et `start()` réinitialise
+  `_segments`/`_segments_rev`/`_session_gen` sans verrou. Un `_diar_loop` orphelin
+  (join expiré) déschédulé juste après un contrôle réussi peut donc insérer dans les
+  `_segments` de la session SUIVANTE. Fenêtre de quelques bytecodes, pré-existant.
+  Correction connue : déplacer le contrôle de `gen` DANS le `with self._note_lock` qui
+  fait l'insertion, et envelopper le bloc de reset de `start()` dans ce même verrou
+  feuille (aucun autre verrou n'est tenu à cet endroit — `conference.start()` est
+  appelé hors `_lock` — donc aucune imbrication).
+- **Free-threading**. L'argument de sûreté de la lecture non verrouillée de
+  `conference.segments_rev()` (cf. `CLAUDE.md`, section Concurrence) s'appuie sur le
+  GIL. Sans lui, cette lecture n'est appariée à aucune barrière avec le relâchement de
+  `_note_lock` de l'écrivain. Sans objet sur les roues CPython visées — à reprendre si
+  un build free-threaded devient une cible.
+
 Rapport d'audit complet : https://claude.ai/code/artifact/4af39571-1f37-443c-8529-5df47f359374

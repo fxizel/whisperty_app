@@ -126,6 +126,10 @@ class WhispertyApp:
         # courant y figure) de « une ligne a été ajoutée » (il reste à ajouter).
         self._live_repair = 0
         self._live_render = 0
+        # Mode propriétaire de la tuile (posé par _reset_live_transcript au démarrage
+        # d'un live ou d'une réunion) : garde-fou contre l'écriture d'un producteur de
+        # la session précédente dans le flux de la suivante.
+        self._live_owner: TrayState | None = None
         # V2 : retours utilisateur VISIBLES (« toast » de la fenêtre + notification
         # système) — une erreur qui ne va qu'aux logs (micro absent, modèle manquant)
         # laisse l'app muette en apparence. Publié sous _notice_lock (verrou feuille,
@@ -564,25 +568,38 @@ class WhispertyApp:
                     self._set_state(TrayState.IDLE)
 
     # -- flux live « au fil de l'eau » (live / réunion) ------------------------
-    def _reset_live_transcript(self) -> None:
-        """Vide le flux affiché et invalide le cache JS (le compteur change → re-fetch)."""
+    def _reset_live_transcript(self, owner: TrayState | None = None) -> None:
+        """Vide le flux affiché et invalide le cache JS (le compteur change → re-fetch).
+
+        ``owner`` = mode À QUI appartient désormais la tuile (LIVE ou CONFERENCE). Les
+        écritures du mode réunion la vérifient : sans cela, un renommage tardif ou un
+        worker de diarisation orphelin republierait la réunion PRÉCÉDENTE par-dessus le
+        flux d'un live qui vient de démarrer — et rien ne le corrigerait, le mode live
+        n'ayant pas d'auto-réparation.
+        """
         with self._live_lock:
             self._live_lines = []
             self._live_stamps = []
             self._live_repair = 0
+            self._live_owner = owner
             # Monotone (jamais remis à 0) : un worker de la session précédente ne doit
             # pas retrouver « son » numéro de rendu et croire son instantané valide.
             self._live_render += 1
             self._live_rev += 1
 
     def _append_live_line(
-        self, display: str, stamp: str = "", expect_render: int | None = None,
+        self,
+        display: str,
+        stamp: str = "",
+        expect_render: int | None = None,
+        owner: TrayState | None = None,
     ) -> bool:
         """Ajoute une ligne au flux affiché (appelé depuis le thread worker).
 
         ``expect_render`` (réunion) : n'ajoute que si aucun rendu COMPLET n'a été publié
         depuis l'instantané de l'appelant — un tel rendu contient déjà cette ligne, et
-        l'ajouter la dupliquerait. Renvoie ``True`` si la ligne a été ajoutée.
+        l'ajouter la dupliquerait. ``owner`` (réunion) : n'ajoute que si la tuile
+        appartient toujours à ce mode. Renvoie ``True`` si la ligne a été ajoutée.
         """
         display = (display or "").strip()
         if not display:
@@ -590,12 +607,15 @@ class WhispertyApp:
         with self._live_lock:
             if expect_render is not None and self._live_render != expect_render:
                 return False
+            if owner is not None and self._live_owner is not owner:
+                return False
             self._live_lines.append(display)
             self._live_stamps.append(stamp or "")
             if len(self._live_lines) > _LIVE_DISPLAY_MAX_LINES:
                 del self._live_lines[: -_LIVE_DISPLAY_MAX_LINES]
                 del self._live_stamps[: -_LIVE_DISPLAY_MAX_LINES]
             self._live_rev += 1
+        return True
 
     def _on_live_segment(self, stamp: str, text: str) -> None:
         # En live, on affiche le texte seul (lecture fluide ; l'horodatage va au fichier)
@@ -633,10 +653,16 @@ class WhispertyApp:
         seulement) désarme après coup : le rendu publié absorbe le segment courant.
         """
         with self._live_lock:
+            if self._live_owner is not TrayState.CONFERENCE:
+                return False       # la tuile appartient à un live (ou à personne)
             if self._live_repair != token or self._live_rev != rev:
                 return False
             # ⚠️ `segments_rev()` ne prend AUCUN verrou (cf. sa docstring) : l'appeler
             # ici ne crée donc pas l'imbrication interdite `_live_lock` → `_note_lock`.
+            # ⚠️ Et il DOIT rester lu ICI, sous `_live_lock` : c'est ce qui garantit qu'un
+            # segment inséré entre cette vérification et la publication verra, à son tour,
+            # le `_live_render` déjà incrémenté (son `expect_render` correspondra, il
+            # ajoutera sa ligne). Sorti du bloc, la perte de segment réapparaîtrait.
             if source_rev != self.conference.segments_rev():
                 return False
             self._live_lines = list(lines[-_LIVE_DISPLAY_MAX_LINES:])
@@ -684,7 +710,9 @@ class WhispertyApp:
         # publication vérifie que la source n'a pas bougé depuis son rendu) : l'ajouter le
         # dupliquerait. Le compteur reste armé dans ce cas → le segment suivant
         # resynchronise la tuile (ordre chronologique compris).
-        self._append_live_line(line, _line_stamp(line), expect_render=render)
+        self._append_live_line(
+            line, _line_stamp(line), expect_render=render, owner=TrayState.CONFERENCE,
+        )
 
     def live_rev(self) -> int:
         """Compteur monotone du flux live (lu par GuiApi.poll, payload minimal)."""
@@ -1033,8 +1061,9 @@ class WhispertyApp:
                 "Impossible : une dictée ou transcription est déjà en cours.", "warn"
             )
             return
-        # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
-        self._reset_live_transcript()
+        # Vide le flux affiché avant de démarrer (la tuille repart de zéro) et en prend
+        # la propriété : un producteur d'une réunion précédente ne pourra plus y écrire.
+        self._reset_live_transcript(TrayState.LIVE)
         # Démarrage hors verrou ; en cas d'échec immédiat, on rétablit l'état.
         if not self.live.start(device_spec):
             logger.warning("La transcription live n'a pas pu démarrer.")
@@ -1112,8 +1141,9 @@ class WhispertyApp:
                 "Impossible : une dictée ou transcription est déjà en cours.", "warn"
             )
             return
-        # Vide le flux affiché avant de démarrer (la tuille repart de zéro).
-        self._reset_live_transcript()
+        # Vide le flux affiché avant de démarrer (la tuille repart de zéro) et en prend
+        # la propriété (cf. _reset_live_transcript).
+        self._reset_live_transcript(TrayState.CONFERENCE)
         # Rappel consentement (tout reste local). NB : le démarrage ci-dessous peut
         # publier une notice de repli de backend de diarisation (CO-19) dans le même
         # tick de polling ; le TOAST de la fenêtre n'en affiche alors qu'une seule (le

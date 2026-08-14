@@ -87,7 +87,15 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   entre l'instantané et la publication : `_live_repair` et `_live_rev` (l'AFFICHAGE a changé,
   publier écraserait plus frais que soi) et `segments_rev` (la SOURCE a changé, le rendu est
   déjà périmé — publier effacerait de la tuile un segment arrivé pendant le rendu, que son
-  propre worker croirait ensuite « déjà republié »). Compteurs sous `_live_lock` :
+  propre worker croirait ensuite « déjà republié »). ⚠️ `segments_rev()` **doit rester lu
+  DANS** le bloc `_live_lock` de `_publish_live_lines` : c'est ce qui garantit qu'un segment
+  inséré entre cette vérification et la publication prendra son propre instantané APRÈS
+  celle-ci (donc verra `_live_render` incrémenté et ajoutera sa ligne). Sorti du bloc — « ne
+  pas appeler un autre objet sous verrou » —, la perte de segment réapparaît.
+  ⚠️ Autre hypothèse porteuse : **un seul thread émetteur de segments par session**
+  (`_consume`, `_consume_distinct` OU `_diar_loop`, jamais deux). Avec deux émetteurs, l'un
+  pourrait prendre son instantané après une publication de l'autre qui contient déjà sa ligne
+  et a désarmé le compteur : le doublon deviendrait durable. Compteurs sous `_live_lock` :
   `_live_repair` **arme** la resynchronisation (bumpé par un renommage et par une note ; le
   `_on_conference_segment` suivant repart du rendu complet au lieu d'ajouter, le segment y
   figurant déjà puisque `_segments` est alimenté AVANT le callback) et n'est **désarmé** que
@@ -100,11 +108,17 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   `_segments`, le flux est republié (elle apparaît à sa place chronologique, sans risque de
   doublon). Invariant : **aucun segment n'est jamais omis ni dupliqué durablement** ; une
   incohérence résiduelle d'ordre laisse le compteur armé et disparaît au segment suivant, puis
-  à l'arrêt quand la tuile bascule sur le texte final d'historique. `rename_speaker` exige
-  l'état `CONFERENCE` (le diariseur n'est pas remis à zéro à l'arrêt : sans cette garde, un
-  clic tardif republierait la réunion précédente, voire écraserait un live qui démarre ; le
-  renommage à froid passe par `rename_history_speaker`). Fichier et historique ne sont jamais
-  concernés (rendus depuis les clés à l'arrêt).
+  à l'arrêt quand la tuile bascule sur le texte final d'historique. Fichier et historique ne
+  sont jamais concernés (rendus depuis les clés à l'arrêt).
+- **Propriété de la tuile (V2, US-12)** : `_reset_live_transcript(owner)` pose `_live_owner`
+  (LIVE ou CONFERENCE) au démarrage de chaque session, et TOUTE écriture du mode réunion la
+  vérifie (`_publish_live_lines`, `_append_live_line(owner=…)`). Motif : `rename_speaker`
+  exige l'état `CONFERENCE`, mais c'est un contrôle-puis-agit — la réunion peut se terminer et
+  un live démarrer pendant que le thread du pont avance, et comme la réémission reprend un
+  instantané frais à chaque tentative, la CAS redeviendrait cohérente et publierait la réunion
+  PRÉCÉDENTE par-dessus le live. Rien ne le corrigerait : le mode live n'a pas
+  d'auto-réparation. Même garde pour un `_diar_loop` orphelin (join expiré) qui émettrait un
+  segment tardif. Le renommage à froid, lui, passe par `rename_history_speaker`.
 - `_stop_and_process()` relâche `_lock` avant l'arrêt bloquant de PortAudio. À l'inverse,
   `_start_recording()` tient `_lock` pendant `recorder.start()` **à dessein** (évite un flux
   orphelin si un stop concurrent survient pendant l'ouverture du périphérique).
