@@ -495,12 +495,21 @@ def _build_profiles(raw) -> ProfilesConfig:
     definitions: list[ProfileDef] = []
     for item in defs_raw or []:
         if not isinstance(item, dict):
-            logger.warning("Profil ignoré (entrée non-dictionnaire) : %r", item)
+            # Confidentialité : l'entrée brute peut contenir du vocabulaire personnel
+            # (hotwords, initial_prompt) — le TYPE suffit à corriger la config, le
+            # contenu est réservé à DEBUG (doctrine des logs sans métadonnées).
+            logger.warning(
+                "Profil ignoré (entrée non-dictionnaire : %s).", type(item).__name__
+            )
+            logger.debug("Entrée de profil invalide : %r", item)
             continue
         definition = _build(ProfileDef, item)
         definition.match = _as_str_list(definition.match)
         definition.hotwords = _as_str_list(definition.hotwords)
         if not isinstance(definition.corrections, dict):
+            # Le NOM du profil est conservé ici À DESSEIN (et non rétrogradé en DEBUG
+            # comme l'entrée brute ci-dessus) : c'est un libellé de section de config,
+            # sans vocabulaire dicté, et il faut bien désigner le profil à corriger.
             logger.warning(
                 "Profil « %s » : 'corrections' doit être un mapping ; ignoré.",
                 definition.name,

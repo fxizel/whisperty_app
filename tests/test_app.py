@@ -494,6 +494,52 @@ def test_live_display_buffer_capped(tmp_path: Path) -> None:
     print("[app 16] flux live affiché : accumulation + borne mémoire + reset  OK")
 
 
+# =============================================================================
+# 13) Journaux : aucune métadonnée personnelle au niveau expédié
+# =============================================================================
+def test_import_logs_without_metadata(tmp_path: Path) -> None:
+    import logging
+
+    from tests.conftest import capture_logs
+    from whisperty.tray import TrayState
+
+    app, _ = _make_app(tmp_path)
+    secret = str(tmp_path / "Patients Dupont" / "consultation.wav")
+
+    with capture_logs() as logs:
+        # 1) Import réussi : longueur au niveau expédié, nom de fichier en DEBUG.
+        app._state = TrayState.PROCESSING
+        app._process_file(secret)
+        shipped = " | ".join(logs.messages(logging.INFO))
+        assert "consultation.wav" not in shipped and "Dupont" not in shipped
+        assert "15 caractères" in shipped                       # « texte transcrit »
+        assert any("consultation.wav" in m for m in logs.messages(logging.DEBUG))
+
+        # 2) Fichier introuvable : le message d'erreur porte le CHEMIN COMPLET.
+        logs.clear()
+        def missing(path):
+            raise FileNotFoundError(f"Fichier audio introuvable : {path}")
+        app.transcriber.transcribe_file = missing
+        app._state = TrayState.PROCESSING
+        app._process_file(secret)
+        shipped = " | ".join(logs.messages(logging.INFO))
+        assert "consultation.wav" not in shipped and "Dupont" not in shipped
+        assert any("consultation.wav" in m for m in logs.messages(logging.DEBUG))
+
+        # 3) Erreur inattendue (fichier corrompu) : la trace cite le chemin (PyAV) et
+        #    reste en DEBUG ; le type d'erreur, lui, reste actionnable au niveau expédié.
+        logs.clear()
+        def boom(path):
+            raise ValueError(f"données invalides : {path}")
+        app.transcriber.transcribe_file = boom
+        app._state = TrayState.PROCESSING
+        app._process_file(secret)
+        shipped = " | ".join(logs.messages(logging.INFO))
+        assert "consultation.wav" not in shipped and "Dupont" not in shipped
+        assert "ValueError" in shipped
+    print("[app 17] journaux : ni nom ni chemin du fichier importé au niveau expédié  OK")
+
+
 def _run_all() -> None:
     import tempfile
 
@@ -513,6 +559,7 @@ def _run_all() -> None:
     test_preload(tmp)
     test_quit(tmp)
     test_live_display_buffer_capped(tmp)
+    test_import_logs_without_metadata(tmp)
     print("\nTOUS LES TESTS APP PASSENT")
 
 

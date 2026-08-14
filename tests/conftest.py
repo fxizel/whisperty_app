@@ -13,12 +13,55 @@ Confidentialité : aucune de ces doublures n'ouvre de connexion réseau.
 """
 from __future__ import annotations
 
+import contextlib
+import logging
 import sys
 import types
 from pathlib import Path
 
 # --- racine du dépôt sur le PYTHONPATH (comme test_logic.py) ------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+# --- capture des journaux (doctrine « logs sans données personnelles ») -------
+class _ListHandler(logging.Handler):
+    """Handler mémoire : conserve les enregistrements pour inspection."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    def messages(self, min_level: int = logging.INFO) -> list[str]:
+        """Messages des enregistrements d'au moins ``min_level`` (niveaux expédiés)."""
+        return [r.getMessage() for r in self.records if r.levelno >= min_level]
+
+    def clear(self) -> None:
+        self.records.clear()
+
+
+@contextlib.contextmanager
+def capture_logs(level: int = logging.DEBUG):
+    """Capture les journaux de « whisperty » le temps du bloc (aide partagée).
+
+    Sert à vérifier qu'aucune métadonnée personnelle (nom de fichier, contenu de
+    config) ne sort au niveau expédié (INFO et au-dessus) alors que le détail reste
+    disponible en DEBUG. Fonctionne aussi hors pytest (suite lançable en script).
+    """
+    logger = logging.getLogger("whisperty")
+    handler = _ListHandler()
+    previous_level, previous_propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False      # ne pollue pas la sortie de la suite
+    try:
+        yield handler
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
 
 
 def _install_audio_stubs() -> None:

@@ -95,7 +95,11 @@ class ProfileResolver:
             )
 
         hotwords, replacements = self._profile_dictionary(definition)
-        logger.info("Profil de contexte « %s » appliqué (app=%s).", definition.name, app_name)
+        # Confidentialité : nom du profil (rédigé par l'utilisateur) et exécutable au
+        # premier plan forment, à raison d'une ligne PAR DICTÉE, une trace horodatée des
+        # applications utilisées — réservée à DEBUG (doctrine des logs sans métadonnées).
+        # Diagnostic « pourquoi mon profil ne s'applique pas » : logging.level: DEBUG.
+        logger.debug("Profil de contexte « %s » appliqué (app=%s).", definition.name, app_name)
         return ResolvedProfile(
             name=definition.name,
             initial_prompt=definition.initial_prompt,

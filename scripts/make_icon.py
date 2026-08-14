@@ -1,8 +1,9 @@
 """Génère l'icône de l'application (installer/whisperty.ico).
 
-Identité visuelle de la maquette (« Whisperty Logo.dc.html ») : une **onde sonore**
-symétrique (7 barres blanches arrondies) dans un squircle style Windows 11 au dégradé
-violet diagonal (#7c3aed → #a855f7). 100 % local (Pillow), aucun asset distant.
+Identité visuelle de référence (ce fichier fait foi depuis le retrait de la planche de
+maquettage, qui référençait un CDN de polices) : une **onde sonore** symétrique (7 barres
+blanches arrondies) dans un squircle style Windows 11 au dégradé violet diagonal
+(#7c3aed → #a855f7). 100 % local (Pillow), aucun asset distant.
 Lancer une fois ; le .ico produit est versionné et réutilisé par le .spec PyInstaller
 et l'installeur Inno Setup.
 

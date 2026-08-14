@@ -672,15 +672,25 @@ def test_config_robustness(tmp_path: Path) -> None:
     pc = _build_profiles({"enabled": True, "definitions": {"name": "x"}})
     assert pc.enabled is True and pc.definitions == []
     # item non-dict ignoré ; match scalaire/None/int normalisé ; corrections non-dict → {}.
-    pc = _build_profiles({
-        "enabled": True,
-        "definitions": [
-            "pas un dict",
-            {"name": "a", "match": "code.exe", "corrections": ["oops"]},
-            {"name": "b", "match": None},
-            {"name": "c", "match": 123, "hotwords": "mot"},
-        ],
-    })
+    # Doctrine des journaux : l'entrée brute (vocabulaire personnel possible) ne sort pas
+    # au niveau expédié ; seul son type y figure, le contenu reste en DEBUG.
+    import logging as _logging
+
+    from tests.conftest import capture_logs
+
+    with capture_logs() as logs:
+        pc = _build_profiles({
+            "enabled": True,
+            "definitions": [
+                "Consultation Dupont",
+                {"name": "a", "match": "code.exe", "corrections": ["oops"]},
+                {"name": "b", "match": None},
+                {"name": "c", "match": 123, "hotwords": "mot"},
+            ],
+        })
+    shipped = " | ".join(logs.messages(_logging.INFO))
+    assert "Consultation Dupont" not in shipped and "str" in shipped
+    assert any("Consultation Dupont" in m for m in logs.messages(_logging.DEBUG))
     assert [d.name for d in pc.definitions] == ["a", "b", "c"]
     da, db, dc = pc.definitions
     assert da.match == ["code.exe"] and da.corrections == {}

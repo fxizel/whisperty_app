@@ -184,6 +184,17 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   modèle), jamais silencieux, indisponible en exe figé (`can_install`=false, pas de pip).
 - **Confidentialité** : `local_files_only` est **true par défaut** (zéro réseau) ; en mode
   hors-ligne, `transcriber.load()` pose aussi `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE`.
+- **Journaux sans données personnelles** : un fichier de log peut être partagé pour
+  diagnostic — INFO/WARNING/ERROR ne portent donc **ni contenu transcrit, ni métadonnée
+  personnelle** (nom ou chemin du fichier importé, entrée de config brute contenant du
+  vocabulaire personnel, application au premier plan tracée à chaque dictée). Motif à
+  reproduire : une ligne INFO/ERROR factuelle (longueur, type d'erreur) **plus** une ligne
+  `logger.debug` avec le détail (cf. `conference._write_line`, `app._process_file` —
+  y compris ses branches d'erreur, où le message porte le chemin complet du fichier —,
+  `config._build_profiles`, `profiles.for_app`). Restent en clair à dessein : les chemins
+  de config/dictionnaire/dossiers (pas de contenu utilisateur, indispensables au
+  diagnostic) et le NOM d'un profil mal configuré (libellé de section, sans quoi
+  l'avertissement n'est pas actionnable).
 - **Modèle manquant → téléchargement guidé (V2, `modeldl.py`)** : si le chargement échoue
   (`ModelNotAvailableError`), la bannière du dashboard propose le téléchargement **opt-in**
   (même doctrine que `cuda.py` : jamais silencieux, progression par polling `model_status`,

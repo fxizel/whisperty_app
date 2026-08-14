@@ -71,6 +71,16 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
 - Le texte dicté n'est plus journalisé au niveau INFO (longueur seulement, contenu
   réservé à DEBUG) ; CSP zéro-réseau dans la page de la fenêtre ; trafic de fond du
   runtime WebView2 réduit ; télémétries onnxruntime et huggingface_hub désactivées.
+- Journaux durcis : le **nom du fichier audio importé**, le **chemin complet** cité par
+  les erreurs d'import (fichier introuvable, illisible ou corrompu) et le contenu brut
+  d'une entrée de profil mal formée passent au niveau DEBUG. Les lignes INFO, erreurs et
+  avertissements restent en place, sans la métadonnée : un journal transmis pour
+  diagnostic ne révèle plus quels fichiers ont été transcrits. Même traitement pour la
+  ligne « Profil de contexte appliqué », écrite à chaque dictée : elle formait une trace
+  horodatée des applications utilisées (toujours visible avec `logging.level: DEBUG`).
+- Retrait de la planche de marque `Whisperty Logo.dc.html` (fichier de maquettage jamais
+  expédié, mais qui référençait un CDN de polices). L'identité visuelle de référence est
+  `scripts/make_icon.py`, 100 % local.
 
 ## [0.3.0] — 2026-07-04
 

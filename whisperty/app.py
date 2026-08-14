@@ -395,7 +395,12 @@ class WhispertyApp:
             self._set_model_error(None)
             text = self.llm.refine(text)
             if text:
-                logger.info("Fichier « %s » transcrit : %d caractères.", name, len(text))
+                # Confidentialité : le NOM du fichier importé est une métadonnée
+                # personnelle — réservé à DEBUG, comme le texte transcrit (même
+                # doctrine que conference._write_line). L'historique local le
+                # conserve déjà pour l'utilisateur.
+                logger.info("Import audio transcrit : %d caractères.", len(text))
+                logger.debug("Import audio « %s » transcrit.", name)
                 copied = self.injector.copy_to_clipboard(text)
                 self.history.add(
                     text, source="fichier", app=name,
@@ -412,14 +417,24 @@ class WhispertyApp:
             else:
                 self._notify_user(f"« {name} » : aucune parole détectée.", "warn")
         except FileNotFoundError as exc:
-            logger.error("%s", exc)
+            # Confidentialité : le message porte le CHEMIN COMPLET (dossier + nom de
+            # fichier) — l'utilisateur le voit dans le toast, mais le journal, lui, peut
+            # circuler pour diagnostic : chemin réservé à DEBUG.
+            logger.error("Import audio impossible : fichier introuvable.")
+            logger.debug("%s", exc)
             self._notify_user(str(exc))
         except ModelNotAvailableError as exc:
             logger.error("%s", exc)
             self._set_model_error(exc)
             self._notify_user(self._model_unavailable_message())
-        except Exception:  # noqa: BLE001
-            logger.exception("Échec de l'import audio")
+        except Exception as exc:  # noqa: BLE001
+            # Même raison : la trace porte le chemin du fichier (les messages de PyAV le
+            # citent). Type d'erreur seul au niveau expédié, trace complète en DEBUG.
+            logger.error(
+                "Échec de l'import audio (%s) ; trace complète en niveau DEBUG.",
+                type(exc).__name__,
+            )
+            logger.debug("Échec de l'import audio", exc_info=True)
             self._notify_user(
                 f"L'import de « {name} » a échoué — détails dans logs/whisperty.log."
             )
