@@ -495,7 +495,189 @@ def test_live_display_buffer_capped(tmp_path: Path) -> None:
 
 
 # =============================================================================
-# 13) Journaux : aucune métadonnée personnelle au niveau expédié
+# 13) Renommage en session : réémission du flux + auto-réparation (US-12)
+# =============================================================================
+class FakeConference:
+    """Doublure de ConferenceTranscriber : rend ses lignes depuis les CLÉS stockées.
+
+    ``hook`` (optionnel) est appelé APRÈS le calcul des lignes et avant leur retour :
+    il simule un renommage concurrent survenant pendant un rendu.
+    """
+
+    def __init__(self):
+        self.segments: list[tuple[str, str, str]] = []   # (« MM:SS », clé, texte)
+        self.labels = {"spk:0": "Locuteur 1"}
+        self.hook = None
+
+    def rename_speaker(self, key, name):
+        if key not in self.labels:
+            return False
+        self.labels[key] = name
+        return True
+
+    def add_note(self, text, stamp=None):
+        stamp = stamp or "00:00"
+        self.segments.append((stamp, "Note", text))
+        return f"[{stamp}] Note : {text}"
+
+    def render_lines(self):
+        # Comme _label_for : une clé hors registre (« Note », étiquette de source) est
+        # son propre libellé.
+        lines = [f"[{s}] {self.labels.get(k, k)} : {t}" for s, k, t in self.segments]
+        if self.hook is not None:
+            self.hook()
+        return lines
+
+
+def test_rename_speaker_live_repair(tmp_path: Path) -> None:
+    app, _ = _make_app(tmp_path)
+    conf = FakeConference()
+    app.conference = conf
+
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+    assert app.live_transcript()["text"] == "[00:01] Locuteur 1 : bonjour"
+
+    # Renommage : réémission immédiate (retour visuel même sans nouveau segment)…
+    assert app.rename_speaker("spk:0", "Marie")["ok"] is True
+    assert app.live_transcript()["text"] == "[00:01] Marie : bonjour"
+    assert app._live_repair == 1        # …et auto-réparation ARMÉE (course possible)
+
+    # Segment suivant : le worker repart du rendu COMPLET au lieu d'ajouter — une ligne
+    # perdue ou dupliquée par la course rename/append est corrigée ici.
+    conf.segments.append(("00:04", "spk:0", "suite"))
+    app._on_conference_segment("[00:04] Marie : suite", "suite")
+    assert app.live_transcript()["text"].splitlines() == [
+        "[00:01] Marie : bonjour", "[00:04] Marie : suite",
+    ]
+    assert app.live_transcript()["stamps"] == ["00:01", "00:04"]
+    assert app._live_repair == 0        # désarmée : un seul re-rendu par renommage
+
+    # Désarmée → simple ajout (pas de re-rendu : le rendu ci-dessous est ignoré).
+    conf.segments.clear()
+    app._on_conference_segment("[00:07] Marie : fin", "fin")
+    assert app.live_transcript()["text"].splitlines()[-1] == "[00:07] Marie : fin"
+
+    # Locuteur inconnu / hors diarisation : ni réémission ni armement.
+    rev = app.live_rev()
+    assert app.rename_speaker("spk:9", "Paul")["ok"] is False
+    assert app.live_rev() == rev and app._live_repair == 0
+    print("[app 17] renommage en session : réémission + auto-réparation au segment suivant  OK")
+
+
+def test_rename_speaker_repair_superseded(tmp_path: Path) -> None:
+    """Renommage concurrent PENDANT la réparation : le rendu obsolète est abandonné."""
+    app, _ = _make_app(tmp_path)
+    conf = FakeConference()
+    app.conference = conf
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+    app.rename_speaker("spk:0", "Marie")        # arme la réparation
+
+    # Le segment suivant déclenche la réparation ; un second renommage (thread du pont)
+    # survient pendant son rendu et publie des libellés PLUS FRAIS.
+    conf.segments.append(("00:04", "spk:0", "suite"))
+
+    def concurrent():
+        conf.hook = None                        # one-shot (pas de récursion)
+        app.rename_speaker("spk:0", "Marie Dupont")
+
+    conf.hook = concurrent
+    app._on_conference_segment("[00:04] Marie : suite", "suite")
+
+    # Le rendu obsolète (« Marie ») est écarté ; le segment courant n'est pas dupliqué
+    # (le rendu du renommage concurrent le contenait déjà).
+    assert app.live_transcript()["text"].splitlines() == [
+        "[00:01] Marie Dupont : bonjour", "[00:04] Marie Dupont : suite",
+    ]
+    assert app._live_repair          # toujours armée → réparation au segment suivant
+    print("[app 18] réparation supplantée par un renommage concurrent : rendu frais conservé  OK")
+
+
+def test_rename_reemit_does_not_drop_segment(tmp_path: Path) -> None:
+    """Segment reçu PENDANT le rendu d'un renommage : la réémission ne l'écrase pas."""
+    app, _ = _make_app(tmp_path)
+    conf = FakeConference()
+    app.conference = conf
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+
+    # Le worker transcrit « suite » pendant que le renommage rend le flux : le rendu du
+    # renommage, pris AVANT, ne contient pas cette ligne — le publier tel quel
+    # l'effacerait, et le compteur désarmé par le worker interdirait toute réparation.
+    def concurrent():
+        conf.hook = None
+        conf.segments.append(("00:04", "spk:0", "suite"))
+        app._on_conference_segment("[00:04] Marie : suite", "suite")
+
+    conf.hook = concurrent
+    assert app.rename_speaker("spk:0", "Marie")["ok"] is True
+
+    assert app.live_transcript()["text"].splitlines() == [
+        "[00:01] Marie : bonjour", "[00:04] Marie : suite",
+    ]
+    print("[app 19] renommage concurrent d'un segment : aucune ligne écrasée  OK")
+
+
+def test_note_during_repair_kept(tmp_path: Path) -> None:
+    """Note ajoutée pendant une réparation : ni perdue, ni dupliquée."""
+    from whisperty.tray import TrayState
+
+    app, _ = _make_app(tmp_path)
+    conf = FakeConference()
+    app.conference = conf
+    app._state = TrayState.CONFERENCE
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+    app.rename_speaker("spk:0", "Marie")            # arme la réparation
+
+    # La note arrive du pont GUI pendant le rendu de réparation du segment suivant :
+    # elle allonge le flux (sans le republier), donc le segment reste à ajouter.
+    conf.segments.append(("00:04", "spk:0", "suite"))
+
+    def concurrent():
+        conf.hook = None
+        assert app.add_note("budget", "00:05")["ok"] is True
+
+    conf.hook = concurrent
+    app._on_conference_segment("[00:04] Marie : suite", "suite")
+
+    lines = app.live_transcript()["text"].splitlines()
+    assert lines.count("[00:05] Note : budget") == 1     # ni doublon…
+    assert lines.count("[00:04] Marie : suite") == 1     # …ni perte
+    assert app._live_repair                              # armé → ordre remis au suivant
+    print("[app 20] note concurrente d'une réparation : conservée une seule fois  OK")
+
+
+def test_reemit_aborts_on_concurrent_append(tmp_path: Path) -> None:
+    """Ligne ajoutée pendant un rendu : la publication est abandonnée puis réessayée.
+
+    Fenêtre étroite mais réelle : une note s'inscrit dans ``_segments`` PUIS dans le flux
+    affiché, et n'arme l'auto-réparation qu'ensuite. Une publication qui ne garderait que
+    le jeton de renommage écraserait la ligne pendant cet intervalle.
+    """
+    app, _ = _make_app(tmp_path)
+    conf = FakeConference()
+    app.conference = conf
+    conf.segments.append(("00:01", "spk:0", "bonjour"))
+    app._on_conference_segment("[00:01] Locuteur 1 : bonjour", "bonjour")
+
+    def concurrent():
+        conf.hook = None
+        conf.segments.append(("00:05", "Note", "budget"))       # stockée…
+        app._append_live_line("[00:05] Note : budget", "00:05")  # …puis affichée
+
+    conf.hook = concurrent
+    assert app.rename_speaker("spk:0", "Marie")["ok"] is True
+
+    lines = app.live_transcript()["text"].splitlines()
+    assert lines.count("[00:05] Note : budget") == 1
+    assert lines.count("[00:01] Marie : bonjour") == 1
+    print("[app 21] ajout concurrent d'une ligne pendant un rendu : ni écrasé ni dupliqué  OK")
+
+
+# =============================================================================
+# 14) Journaux : aucune métadonnée personnelle au niveau expédié
 # =============================================================================
 def test_import_logs_without_metadata(tmp_path: Path) -> None:
     import logging
@@ -537,7 +719,7 @@ def test_import_logs_without_metadata(tmp_path: Path) -> None:
         shipped = " | ".join(logs.messages(logging.INFO))
         assert "consultation.wav" not in shipped and "Dupont" not in shipped
         assert "ValueError" in shipped
-    print("[app 17] journaux : ni nom ni chemin du fichier importé au niveau expédié  OK")
+    print("[app 22] journaux : ni nom ni chemin du fichier importé au niveau expédié  OK")
 
 
 def _run_all() -> None:
@@ -559,6 +741,11 @@ def _run_all() -> None:
     test_preload(tmp)
     test_quit(tmp)
     test_live_display_buffer_capped(tmp)
+    test_rename_speaker_live_repair(tmp)
+    test_rename_speaker_repair_superseded(tmp)
+    test_rename_reemit_does_not_drop_segment(tmp)
+    test_note_during_repair_kept(tmp)
+    test_reemit_aborts_on_concurrent_append(tmp)
     test_import_logs_without_metadata(tmp)
     print("\nTOUS LES TESTS APP PASSENT")
 

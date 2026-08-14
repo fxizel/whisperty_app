@@ -65,6 +65,10 @@ Toutes les évolutions notables de Whisperty sont documentées ici. Le format s'
   session live/réunion ; l'écriture de `config.yaml`/`dictionary.txt` est atomique et
   tolère les indentations non standard ; Échap annule la capture de raccourci ;
   mise à jour et désinstallation de l'installeur assainies.
+- Renommer un locuteur ou prendre une note **pendant** une réunion ne peut plus laisser
+  la tuile de transcription en direct avec une ligne manquante ou affichée deux fois :
+  l'affichage se réaligne sur le rendu complet au segment suivant. Le fichier exporté et
+  l'historique n'étaient pas concernés (rendus à l'arrêt depuis les mêmes clés).
 
 ### Sécurité / confidentialité
 

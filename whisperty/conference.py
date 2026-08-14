@@ -657,6 +657,9 @@ class ConferenceTranscriber:
         # (le transcript et l'historique le conservent déjà) — texte réservé à DEBUG.
         logger.info("Réunion : segment transcrit (%d caractères).", len(text))
         logger.debug("Réunion %s", line)
+        # ⚠️ `_note_lock` RELÂCHÉ avant la notification, à dessein : le callback réémet le
+        # flux affiché (US-12) via `render_lines()`, qui reprend ce verrou NON réentrant.
+        # Rendre l'écriture fichier et la notification atomiques figerait ce thread.
         if self._on_segment is not None:
             try:
                 self._on_segment(line, text)

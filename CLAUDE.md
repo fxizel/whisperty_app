@@ -73,8 +73,27 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   jamais l'inverse** ; le callback PortAudio (`_callback`) ne prend aucun verrou.
 - **Flux live affiché (V2)** : `WhispertyApp._live_lock` protège l'accumulateur du flux
   live/réunion (`_live_lines` + `_live_rev`). C'est un **verrou feuille** : jamais imbriqué
-  avec `_lock` (les callbacks `on_segment` n'en prennent aucun autre ; `poll()` relâche `_lock`
-  avant de lire `live_rev()`).
+  avec `_lock` (`poll()` relâche `_lock` avant de lire `live_rev()`). ⚠️ **Ni avec
+  `_note_lock`** : le callback `on_segment` prend bien un second verrou feuille depuis US-12
+  (`_reemit_conference_lines()` → `conference.render_lines()`), mais **séquentiellement** —
+  le rendu se fait HORS `_live_lock`, la publication sous `_live_lock` seul. Corollaire à ne
+  pas casser : `conference._write_line` **doit** appeler `_on_segment` après avoir relâché
+  `_note_lock` (verrou NON réentrant — rendre l'écriture fichier et la notification atomiques
+  figerait le worker de réunion dans `render_lines()`).
+- **Renommage/notes en session vs flux affiché (V2, US-12)** : `rename_speaker` et `add_note`
+  (thread du pont) touchent le flux pendant que le worker y ajoute des segments. Toute
+  publication d'un rendu complet est donc une **CAS** : instantané `(_live_repair, _live_rev)`
+  pris AVANT le rendu, publication seulement si rien n'a bougé depuis (sinon on écraserait plus
+  frais que soi — c'est ainsi qu'un segment se perdait). Deux compteurs sous `_live_lock` :
+  `_live_repair` **arme** la resynchronisation (bumpé par un renommage et par une note ; le
+  `_on_conference_segment` suivant repart du rendu complet au lieu d'ajouter, le segment y
+  figurant déjà puisque `_segments` est alimenté AVANT le callback) et n'est **désarmé** que
+  par une réparation publiée ; `_live_render` compte les rendus complets publiés et distingue
+  « tout le flux a été republié » (ne pas ajouter, ce serait un doublon) de « une ligne a été
+  ajoutée » (ajouter reste nécessaire). Invariant : **aucun segment n'est jamais omis** ; une
+  incohérence résiduelle (doublon, ordre) laisse le compteur armé et disparaît au segment
+  suivant, puis à l'arrêt quand la tuile bascule sur le texte final d'historique. Fichier et
+  historique ne sont pas concernés (rendus depuis les clés à l'arrêt).
 - `_stop_and_process()` relâche `_lock` avant l'arrêt bloquant de PortAudio. À l'inverse,
   `_start_recording()` tient `_lock` pendant `recorder.start()` **à dessein** (évite un flux
   orphelin si un stop concurrent survient pendant l'ouverture du périphérique).
@@ -284,7 +303,8 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   CLÉ, pas par libellé** : `_segments` retient `(start, key, text)` où `key` = `spk:N` (diarisé) / étiquette
   de source (repli) / `Note` ; `_label_for(key)` résout le libellé **au rendu** (flux, export trié,
   historique) → le **renommage est rétroactif** (FR-31 : `rename_speaker` met à jour le registre, `app`
-  réémet le flux via `render_lines()`, l'export/historique se rendent depuis les mêmes clés à l'arrêt).
+  réémet le flux via `render_lines()` — avec auto-réparation au segment suivant, cf. Concurrence —,
+  l'export/historique se rendent depuis les mêmes clés à l'arrêt).
   **Repli gracieux (BR-08/RE-13)** : segment trop court/silencieux/erreur → étiquette de source, jamais
   d'omission ni d'arrêt. `SpeakerRegistry` est un **verrou feuille** (`assign` depuis `_diar_loop`,
   `rename`/`speakers` depuis le pont GUI). `pyannote` reste **écarté** (PyTorch + modèles *gated*).
@@ -331,8 +351,9 @@ l'application active). L'état (idle / rec / processing) est reflété par le **
   le texte seul ; la réunion affiche la **ligne déjà formatée** (`[MM:SS]` + éventuel locuteur). ⚠️ Respect du
   modèle **polling, pas de push** : `poll()` ne renvoie que `liveRev` (entier) — le JS ne récupère le texte
   (`get_live_text` → `{rev, text}`) **que** lorsque `liveRev` change (payload de tick minimal, jamais tout le
-  transcript 5×/s). `_live_lock` est un **verrou feuille** (jamais imbriqué avec `_lock` ; `poll()` relâche
-  `_lock` avant de lire `live_rev()`). ⚠️ **Ordre dans les callbacks de fin** : `_on_live_finished`/
+  transcript 5×/s). `_live_lock` est un **verrou feuille** (jamais imbriqué avec `_lock` ni avec `_note_lock` ;
+  `poll()` relâche `_lock` avant de lire `live_rev()` ; cf. Concurrence pour la CAS de
+  republication). ⚠️ **Ordre dans les callbacks de fin** : `_on_live_finished`/
   `_on_conference_finished` historisent (et copient, en live) **AVANT** de repasser `IDLE` — sinon course :
   le JS, voyant `IDLE`, recharge la tuile depuis `history.last_text()` qui renverrait la transcription
   *précédente*. À l'arrêt, la tuile bascule sur ce texte final d'historique (réunion : version triée).
