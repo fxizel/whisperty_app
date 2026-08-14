@@ -1,30 +1,27 @@
-# Reliquats de l'audit du 13 août 2026
+# Audit du 13 août 2026 — clôture
 
-Les trois chantiers de ce document (renommage post-session des locuteurs, préréglages
-de performance, backend de diarisation ONNX) sont **livrés** — voir `CHANGELOG.md`
-(section « Non publié ») et l'historique Git. Les points « au clavier » (fichier de
-maquettage à la racine, métadonnées dans les journaux, course d'affichage au renommage
-en session) sont livrés à leur tour. Ne reste que ce qui demande un lancement réel.
-Rien n'est bloquant.
+Tous les reliquats de l'audit sont **traités**. Voir `CHANGELOG.md` (section « Non
+publié ») et l'historique Git pour le détail.
+
+- Les trois chantiers (renommage post-session des locuteurs, préréglages de performance,
+  backend de diarisation ONNX) ont été livrés en premier.
+- Les points « au clavier » ont suivi : retrait du fichier de maquettage à la racine,
+  métadonnées personnelles hors des journaux, course d'affichage au renommage en session
+  (US-12, avec les correctifs des trois relectures `concurrency-reviewer`).
+- Les vérifications qui demandaient un lancement réel ont été faites et sont
+  concluantes : CSP de la fenêtre (la balise cohabite avec le pont pywebview), bips de
+  dictée, cohérence de la tuile « Transcription en direct » lors d'un renommage de
+  locuteur en cours de réunion.
+
+Ce document ne conserve donc que les deux points ci-dessous, hors périmètre de l'audit,
+pour ne pas les perdre. Aucun n'est bloquant.
 
 Rappel avant toute modification : `CLAUDE.md` (sections « Concurrence » et « Décisions
 d'architecture »), en particulier la contrainte cardinale zéro-réseau. Les relectures
 `concurrency-reviewer` et `privacy-auditor` (agents du projet) sont à lancer après
 toute modification des fichiers qu'elles couvrent.
 
-## À vérifier de visu (demande un lancement réel)
-
-- **CSP de la fenêtre** : valider visuellement `whisperty/web/index.html` au prochain
-  lancement (le pont pywebview passe par postMessage natif et devrait cohabiter avec
-  la balise `<meta http-equiv="Content-Security-Policy" …>`). Si l'écran reste vide,
-  retirer la balise et le signaler.
-- **Bips de dictée** : écouter les tonalités (`feedback.py`, `_TONES`) et ajuster
-  fréquences et durées au goût.
-- **Renommage pendant une réunion** : vérifier au passage que la tuile « Transcription
-  en direct » reste cohérente quand on renomme un locuteur alors que les segments
-  continuent d'arriver (auto-réparation au segment suivant, cf. `_on_conference_segment`).
-
-## Connus, non corrigés (relevés par les relectures, hors périmètre de l'audit)
+## Connus, non corrigés
 
 - **`_session_gen` : contrôle-puis-agit** (`conference.py`, `_store_and_write`). Le
   jeton de génération est comparé HORS `_note_lock`, et `start()` réinitialise
