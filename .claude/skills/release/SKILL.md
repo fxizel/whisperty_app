@@ -54,6 +54,14 @@ Lancer `.\dist\whisperty\whisperty.exe` : fenêtre OK, une dictée courte OK, qu
 via le tray. En cas d'échec de chargement du modèle, vérifier le patch config de
 l'étape 3 avant tout autre diagnostic.
 
+⚠️ La **dictée** de ce test revient à l'utilisateur : l'injection colle le texte
+dans la fenêtre ACTIVE, donc un agent qui la déclenche écrit dans ce que l'humain
+est en train de faire. Ce qu'un agent peut prouver seul, sans rien injecter :
+`dist\whisperty\logs\whisperty.log` doit contenir « Chargement du modèle Whisper
+'<chemin absolu>\models\faster-whisper-<taille>' » PUIS « Modèle Whisper chargé »
+(le chemin absolu vaut vérification du bundling + de `local_files_only`).
+Ces logs et `whisperty.db` sont exclus de l'installeur — inutile de nettoyer.
+
 ## 5. Installeur Inno Setup
 
 ```powershell
@@ -62,6 +70,10 @@ l'étape 3 avant tout autre diagnostic.
 ```
 
 Prérequis : Inno Setup 6 (`winget install --id JRSoftware.InnoSetup -e`).
+⚠️ Avant d'installer quoi que ce soit, vérifier qu'il n'est pas DÉJÀ là : winget
+l'installe en **per-user** (`%LocalAppData%\Programs\Inno Setup 6\ISCC.exe`), pas
+dans `Program Files`. `make_installer.ps1` connaît les trois emplacements — le
+plus simple est de le lancer et de lire son message.
 L'installeur est par utilisateur (`%LocalAppData%\Programs\Whisperty`, sans admin) —
 ne pas changer ce choix, l'app écrit sa config à côté de l'exe.
 
@@ -77,10 +89,18 @@ ne pas changer ce choix, l'app écrit sa config à côté de l'exe.
 
 Après validation de l'utilisateur uniquement :
 ```powershell
-git add whisperty/version.py CHANGELOG.md
-git commit -m "release: vX.Y.Z"
-git tag vX.Y.Z
-git push origin main vX.Y.Z
+git add whisperty/version.py CHANGELOG.md   # + tout fichier versionné (README, web/, docs…)
+git commit -m "release: X.Y.Z"
+git tag X.Y.Z
+git push origin main X.Y.Z
 ```
-L'installeur (`dist\installer\`) n'est PAS versionné dans git — le joindre à la
-GitHub Release (`gh release create vX.Y.Z dist\installer\Whisperty-Setup-X.Y.Z.exe`).
+⚠️ **Tag SANS préfixe `v`** : c'est la convention des tags existants (`0.1.0`,
+`0.3.0`) ET le déclencheur de `.github/workflows/release.yml`
+(`tags: ['[0-9]*.[0-9]*.[0-9]*']`). Un tag `v1.0.0` ne déclencherait aucune
+release, et la vérification de cohérence tag/`version.py` du workflow échouerait.
+
+Le push du tag suffit : le workflow rejoue les tests, build en `-NoModel`, compile
+l'installeur et crée une **release GitHub en BROUILLON** (à relire puis publier).
+L'installeur local (`dist\installer\`, avec modèle bundlé) n'est PAS versionné dans
+git — le joindre à la main s'il doit remplacer l'artefact CI :
+`gh release upload X.Y.Z dist\installer\Whisperty-Setup-X.Y.Z.exe --clobber`.
